@@ -173,6 +173,8 @@ class SequenceData:
         supposed to be called when a sequence needs to be started from
         the beginning again (e.g., sequence is preempted).
         """
+        print("Resetting state for recompute")
+        print(f'Prompt: {self.prompt_token_ids}, Output: {self.output_token_ids}')
         self._num_computed_tokens = 0
         self._stage = SequenceStage.PREFILL
 

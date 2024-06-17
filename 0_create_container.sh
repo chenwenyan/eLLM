@@ -1,0 +1,2 @@
+# docker create --name vllm --ipc=host -it -v /nfs/dataset:/nfs/dataset -v /nfs/cache:/nfs/cache -v /home/wychen/.cache:/root/.cache -v /home/wychen/workspace:/root/workspace vllm_build:v1.1
+docker create --name muxserve --ipc=host -it -v /nfs/dataset:/nfs/dataset -v /nfs/cache:/nfs/cache -v /home/wychen/.cache:/root/.cache -v /home/wychen/workspace:/root/workspace pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel 

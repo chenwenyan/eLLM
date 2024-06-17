@@ -76,7 +76,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
     python3 setup.py bdist_wheel --dist-dir=dist
 
 # check the size of the wheel, we cannot upload wheels larger than 100MB
-COPY .buildkite/check-wheel-size.py check-wheel-size.py
+COPY buildkite/check-wheel-size.py check-wheel-size.py
 RUN python3 check-wheel-size.py dist
 
 # the `vllm_nccl` package must be installed from source distribution
@@ -138,5 +138,5 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 ENV VLLM_USAGE_SOURCE production-docker-image
 
-ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+# ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
 #################### OPENAI API SERVER ####################

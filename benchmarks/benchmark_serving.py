@@ -187,6 +187,7 @@ async def get_request(
             continue
         # Sample the request interval from the exponential distribution.
         interval = np.random.exponential(1.0 / request_rate)
+        # print(f"Sleeping for {interval} seconds.")
         # The next request will be sent after the interval.
         await asyncio.sleep(interval)
 
@@ -215,6 +216,7 @@ def calculate_metrics(
         else:
             actual_output_lens.append(0)
 
+    print(f'tpots are: {tpots}, ttfts are: {ttfts}')
     metrics = BenchmarkMetrics(
         completed=completed,
         total_input=total_input,
@@ -272,6 +274,8 @@ async def benchmark(
                 request_func(request_func_input=request_func_input,
                              pbar=pbar)))
     outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+
+    print(f"Completed {len(outputs)} requests.")
 
     if not disable_tqdm:
         pbar.close()

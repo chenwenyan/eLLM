@@ -90,6 +90,7 @@ class EngineArgs:
     speculative_disable_by_batch_size: Optional[int] = None
     ngram_prompt_lookup_max: Optional[int] = None
     ngram_prompt_lookup_min: Optional[int] = None
+    preemption_mode: Optional[str] = None
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -538,6 +539,12 @@ class EngineArgs:
             "will also be used in `model_name` tag content of "
             "prometheus metrics, if multiple names provided, metrics"
             "tag will take the first one.")
+        
+        parser.add_argument(
+            '--preemption-mode',
+            type=str,
+            default=EngineArgs.preemption_mode,
+            help='The preempted mode to use for the model.')
 
         return parser
 
@@ -606,6 +613,7 @@ class EngineArgs:
             delay_factor=self.scheduler_delay_factor,
             enable_chunked_prefill=self.enable_chunked_prefill,
             embedding_mode=model_config.embedding_mode,
+            preemption_mode=self.preemption_mode,
         )
         lora_config = LoRAConfig(
             max_lora_rank=self.max_lora_rank,
@@ -684,6 +692,7 @@ class AsyncEngineArgs(EngineArgs):
                             help='Max number of prompt characters or prompt '
                             'ID numbers being printed in log.'
                             '\n\nDefault: Unlimited')
+       
         return parser
 
 

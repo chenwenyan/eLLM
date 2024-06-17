@@ -1,0 +1,33 @@
+Namespace(backend='vllm', base_url=None, host='localhost', port=8000, endpoint='/v1/completions', dataset=None, dataset_name='sharegpt', dataset_path='./ShareGPT_V3_unfiltered_cleaned_split.json', model='meta-llama/Llama-2-7b-chat-hf', tokenizer='meta-llama/Llama-2-7b-chat-hf', best_of=1, use_beam_search=False, num_prompts=20, sharegpt_output_len=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, request_rate=inf, seed=0, trust_remote_code=False, disable_tqdm=False, save_result=True, metadata=None, result_dir=None)
+Traffic request rate: inf
+  0%|          | 0/20 [00:00<?, ?it/s]100%|██████████| 20/20 [00:00<00:00, 656.87it/s]
+/usr/local/lib/python3.10/dist-packages/numpy/core/fromnumeric.py:3504: RuntimeWarning: Mean of empty slice.
+  return _methods._mean(a, axis=axis, dtype=dtype,
+/usr/local/lib/python3.10/dist-packages/numpy/core/_methods.py:129: RuntimeWarning: invalid value encountered in scalar divide
+  ret = ret.dtype.type(ret / rcount)
+Completed 20 requests.
+tpots are: [], ttfts are: []
+Traceback (most recent call last):
+  File "/root/workspace/vllm/benchmarks/benchmark_serving.py", line 604, in <module>
+    main(args)
+  File "/root/workspace/vllm/benchmarks/benchmark_serving.py", line 414, in main
+    benchmark_result = asyncio.run(
+  File "/usr/lib/python3.10/asyncio/runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "/usr/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+    return future.result()
+  File "/root/workspace/vllm/benchmarks/benchmark_serving.py", line 285, in benchmark
+    metrics, actual_output_lens = calculate_metrics(
+  File "/root/workspace/vllm/benchmarks/benchmark_serving.py", line 233, in calculate_metrics
+    p99_tpot_ms=np.percentile(tpots, 99) * 1000,
+  File "/usr/local/lib/python3.10/dist-packages/numpy/lib/function_base.py", line 4283, in percentile
+    return _quantile_unchecked(
+  File "/usr/local/lib/python3.10/dist-packages/numpy/lib/function_base.py", line 4555, in _quantile_unchecked
+    return _ureduce(a,
+  File "/usr/local/lib/python3.10/dist-packages/numpy/lib/function_base.py", line 3823, in _ureduce
+    r = func(a, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/numpy/lib/function_base.py", line 4722, in _quantile_ureduce_func
+    result = _quantile(arr,
+  File "/usr/local/lib/python3.10/dist-packages/numpy/lib/function_base.py", line 4831, in _quantile
+    slices_having_nans = np.isnan(arr[-1, ...])
+IndexError: index -1 is out of bounds for axis 0 with size 0

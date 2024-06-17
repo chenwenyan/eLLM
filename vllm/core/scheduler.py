@@ -406,6 +406,7 @@ class Scheduler:
         # groups to preempt.
         now = time.time()
         running_queue = policy.sort_by_priority(now, running_queue)
+        
         while running_queue:
             seq_group = running_queue[0]
             num_running_tokens = self._get_num_new_tokens(
@@ -424,11 +425,15 @@ class Scheduler:
                 if curr_loras is not None and seq_group.lora_int_id > 0:
                     curr_loras.remove(seq_group.lora_int_id)
 
+                logger.info(f'preempted_mode: {PreemptionMode.RECOMPUTE}, seq_group: {seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
+
                 if running_queue:
                     # Preempt the lowest-priority sequence groups.
                     victim_seq_group = running_queue.pop()
                     preempted_mode = self._preempt(victim_seq_group,
-                                                   blocks_to_swap_out)
+                                                   blocks_to_swap_out, preemption_mode=self.scheduler_config.preemption_mode)
+                    logger.info(f'preempted_mode: {preempted_mode}, victim_seq_group: {victim_seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
+
                     if preempted_mode == PreemptionMode.RECOMPUTE:
                         preempted.append(victim_seq_group)
                     else:
@@ -437,7 +442,9 @@ class Scheduler:
                     # No other sequence groups can be preempted.
                     # Preempt the current sequence group.
                     preempted_mode = self._preempt(seq_group,
-                                                   blocks_to_swap_out)
+                                                   blocks_to_swap_out, preemption_mode=self.scheduler_config.preemption_mode)
+                    logger.info(f'preempted_mode: {preempted_mode}, seq_group: {seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
+
                     if preempted_mode == PreemptionMode.RECOMPUTE:
                         preempted.append(seq_group)
                     else:
@@ -1054,7 +1061,8 @@ class Scheduler:
         self,
         seq_group: SequenceGroup,
         blocks_to_swap_out: List[Tuple[int, int]],
-        preemption_mode: Optional[PreemptionMode] = None,
+        # preemption_mode: Optional[PreemptionMode] = None,
+        preemption_mode: str,
     ) -> PreemptionMode:
         # If preemption mode is not specified, we determine the mode as follows:
         # We use recomputation by default since it incurs lower overhead than
@@ -1070,9 +1078,32 @@ class Scheduler:
         if preemption_mode is None:
             if seq_group.get_max_num_running_seqs() == 1:
                 preemption_mode = PreemptionMode.RECOMPUTE
+                logger.info(
+                    "Sequence group %s is preempted by recompute mode because "
+                    "there is not enough KV cache space. total_num_cumulative_"
+                    "preemption=%d", seq_group.request_id,
+                    self.num_cumulative_preemption + 1)
             else:
                 preemption_mode = PreemptionMode.SWAP
-
+        
+        else: 
+            if preemption_mode == 'recompute':
+                preemption_mode = PreemptionMode.RECOMPUTE
+                logger.info(
+                    "Sequence group %s is preempted by recompute mode because "
+                    "there is not enough KV cache space. total_num_cumulative_"
+                    "preemption=%d", seq_group.request_id,
+                    self.num_cumulative_preemption + 1)
+            elif preemption_mode == 'swap':
+                preemption_mode = PreemptionMode.SWAP
+                logger.info(
+                    "Sequence group %s is preempted by swap mode because "
+                    "there is not enough KV cache space. total_num_cumulative_"
+                    "preemption=%d", seq_group.request_id,
+                    self.num_cumulative_preemption + 1)
+            else:
+                raise AssertionError("Invalid preemption mode, please choose between 'recompute' or 'swap'.")    
+            
         if self.num_cumulative_preemption % 50 == 0:
             logger.warning(
                 "Sequence group %s is preempted by %s mode because there is "

@@ -28,6 +28,9 @@ def process_requests(engine: LLMEngine,
     """Continuously process a list of prompts and handle the outputs."""
     request_id = 0
 
+    time_to_first_tokens = []
+    time_per_output_tokens = []
+
     while test_prompts or engine.has_unfinished_requests():
         if test_prompts:
             prompt, sampling_params = test_prompts.pop(0)
@@ -36,9 +39,20 @@ def process_requests(engine: LLMEngine,
 
         request_outputs: List[RequestOutput] = engine.step()
 
+
         for request_output in request_outputs:
             if request_output.finished:
                 print(request_output)
+                # 计算每个请求第一个token生成的时间以及后续token生成的平均时间
+                time_to_first_token = request_output.metrics.first_token_time - request_output.metrics.arrival_time
+                time_per_output_token = (request_output.metrics.finished_time - request_output.metrics.first_token_time)/len(request_output.outputs[0].token_ids)
+                print(f"First token time: {time_to_first_token:.3f}s, "
+                      f"Avg token time: {time_per_output_token:.3f}s")
+                time_to_first_tokens.append(time_to_first_token)
+                time_per_output_tokens.append(time_per_output_token)
+
+    print(f"Average time to first token: {sum(time_to_first_tokens)/len(time_to_first_tokens):.3f}s") 
+    print(f"Average time per token: {sum(time_per_output_tokens)/len(time_per_output_tokens):.3f}s")       
 
 
 def initialize_engine(args: argparse.Namespace) -> LLMEngine:
