@@ -70,6 +70,7 @@ class Attention(nn.Module):
         attn_backend = get_attn_backend(num_heads, head_size, num_kv_heads,
                                         sliding_window, dtype, kv_cache_dtype,
                                         block_size)
+        # print(f'attention_backend: {attn_backend}')
         impl_cls = attn_backend.get_impl_cls()
         self.impl = impl_cls(num_heads, head_size, scale, num_kv_heads,
                              alibi_slopes, sliding_window, kv_cache_dtype)
@@ -81,7 +82,7 @@ class Attention(nn.Module):
         value: torch.Tensor,
         kv_cache: Optional[torch.Tensor],
         attn_metadata: AttentionMetadata,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor:   
         return self.impl.forward(query, key, value, kv_cache, attn_metadata,
                                  self._kv_scale)
 

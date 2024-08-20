@@ -56,6 +56,8 @@ class PagedAttention:
                                    -1, x)
         value_cache = kv_cache[1]
         value_cache = value_cache.view(num_blocks, num_kv_heads, head_size, -1)
+        # print(f"num_blocks: {num_blocks}, num_kv_heads: {num_kv_heads}, head_size: {head_size}, x: {x}")
+        # print(f"key_cache: {key_cache.shape}, value_cache: {value_cache.shape}")
         return key_cache, value_cache
 
     @staticmethod
@@ -157,6 +159,41 @@ class PagedAttention:
                 kv_scale,
             )
         return output
+    
+    @staticmethod
+    def forward_decode_with_dynamic_kv(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        block_tables: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        num_kv_heads: int,
+        scale: float,
+        alibi_slopes: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        output = torch.empty_like(query)
+
+        num_seqs, num_heads, head_size = query.shape
+        max_num_partitions = ((max_seq_len + _PARTITION_SIZE - 1) //
+                              _PARTITION_SIZE)
+
+        use_v1 = (max_seq_len <= 8192
+                  and (max_num_partitions == 1 or num_seqs * num_heads > 512))
+        if use_v1:
+            # Run PagedAttention V1.
+            ops.paged_attention_v1_with_dynamic_kv(
+                output,
+                query,
+                key,
+                value,
+                num_kv_heads,
+                scale,
+                seq_lens,
+                max_seq_len,
+                alibi_slopes,
+            )
+        return output
 
     @staticmethod
     def forward_prefix(
@@ -201,10 +238,12 @@ class PagedAttention:
         src_key_cache = src_kv_cache[0]
         dst_key_cache = dst_kv_cache[0]
         ops.swap_blocks(src_key_cache, dst_key_cache, src_to_dst)
+        # print(f"src_key_cache: {src_key_cache}, dst_key_cache: {dst_key_cache}, src_to_dst: {src_to_dst}")
 
         src_value_cache = src_kv_cache[1]
         dst_value_cache = dst_kv_cache[1]
         ops.swap_blocks(src_value_cache, dst_value_cache, src_to_dst)
+        # print(f"src_value_cache: {src_value_cache}, dst_value_cache: {dst_value_cache}, src_to_dst: {src_to_dst}")
 
     @staticmethod
     def copy_blocks(

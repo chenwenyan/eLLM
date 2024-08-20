@@ -16,7 +16,7 @@ num_prompts=(250 300 350 400 450 500 550 600 650 700 750 800 850 900 950 1000)
 for model in ${models[@]}; do
     for request_rate in ${request_rates[@]}; do
         for num_prompt in ${num_prompts[@]}; do
-            CUDA_VISIBLE_DEVICES=${gpu_id} python3 -m vllm.entrypoints.openai.api_server \
+            CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 12-13 python3 -m vllm.entrypoints.openai.api_server \
                 --model ${model} \
                 --port 8080 \
                 --tensor-parallel-size 1 \
@@ -33,7 +33,7 @@ for model in ${models[@]}; do
                 --num-prompts ${num_prompt} \
                 --save-result \
                 --result-dir results/0_solorun_llm_1gpu \
-                --endpoint /v1/completions > logs/0_solorun_llm_1gpu/${model}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}.log 
+                --endpoint /v1/completions >> logs/0_solorun_llm_1gpu/${model}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}.log 
             kill -9 $pid   
         done
     done

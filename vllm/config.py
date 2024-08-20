@@ -326,8 +326,9 @@ class CacheConfig:
         num_gpu_blocks_override: Optional[int] = None,
         sliding_window: Optional[int] = None,
         enable_prefix_caching: bool = False,
+        store_cache_layers: float = 1.0,
     ) -> None:
-        self.block_size = block_size
+        self.block_size = block_size 
         self.gpu_memory_utilization = gpu_memory_utilization
         self.swap_space_bytes = swap_space * _GB
         self.num_gpu_blocks_override = num_gpu_blocks_override
@@ -340,6 +341,9 @@ class CacheConfig:
         # Will be set after profiling.
         self.num_gpu_blocks = None
         self.num_cpu_blocks = None
+
+        # add new field to store the cache layers
+        self.store_cache_layers = store_cache_layers
 
     def metrics_info(self):
         # convert cache_config to dict(key: str, value: str) for prometheus

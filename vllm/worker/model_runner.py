@@ -213,6 +213,9 @@ class ModelRunner:
         block_size = self.block_size
         return (self.max_seq_len_to_capture + block_size - 1) // block_size
 
+        # block_size = int(self.block_size / self.cache_config.store_cache_layers)
+        # return (self.max_seq_len_to_capture + block_size - 1) // block_size
+
     def _prepare_model_input(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
@@ -343,6 +346,7 @@ class ModelRunner:
                                                    len(block_table))
                             last_page_len = seq_data.get_len(
                             ) % self.block_size
+        
                             if last_page_len == 0:
                                 last_page_len = self.block_size
                             paged_kv_last_page_len.append(last_page_len)
@@ -429,9 +433,10 @@ class ModelRunner:
                     if i < start_idx:
                         slot_mapping.append(_PAD_SLOT_ID)
                         continue
-
-                    block_number = block_table[i // self.block_size]
-                    block_offset = i % self.block_size
+                    print(f'len(block_table): {len(block_table)}, i is {i}, self.block_size is {self.block_size}')
+                    # Wenyan
+                    block_number = block_table[i // (self.block_size)]
+                    block_offset = i % (self.block_size)
                     slot = block_number * self.block_size + block_offset
                     slot_mapping.append(slot)
 
@@ -567,6 +572,7 @@ class ModelRunner:
                 seq_start_loc=seq_start_loc,
                 data_type=kv_cache_dtype)
         else:
+            # print(F'_prepare_model_input: seq_lens: {seq_lens}')
             attn_metadata = self.attn_backend.make_metadata(
                 num_prefills=num_prefills,
                 slot_mapping=slot_mapping_tensor,
@@ -701,6 +707,7 @@ class ModelRunner:
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
         }
+        # print(f'MODEL_RUNNER: attn_metadata.seq_lens is {attn_metadata.seq_lens}')
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
         hidden_states = model_executable(**execute_model_kwargs)
@@ -783,7 +790,8 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        kv_caches = [None] * num_layers
+        # kv_caches = [None] * int(num_layers)
+        kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return
@@ -895,7 +903,7 @@ class ModelRunner:
                 )
                 self.graph_memory_pool = graph_runner.graph.pool()
                 self.graph_runners[batch_size] = graph_runner
-
+        # kv_cache is all zeros
         end_time = time.perf_counter()
         elapsed_time = end_time - start_time
         # This usually takes < 10 seconds.

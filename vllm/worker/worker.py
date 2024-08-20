@@ -161,6 +161,7 @@ class Worker(WorkerBase):
         # GPU did not change their memory usage during the profiling.
         
         peak_memory = self.init_gpu_memory - free_gpu_memory
+        # print(f'free_gpu_memory: {free_gpu_memory}, total_gpu_memory: {total_gpu_memory}, peak_memory: {peak_memory}')
         
         # peak_memory = torch.cuda.max_memory_allocated()
 
@@ -169,6 +170,7 @@ class Worker(WorkerBase):
             "not properly cleaned up before initializing the vLLM instance.")
 
         cache_block_size = self.get_cache_block_size_bytes()
+        print(f'cache_block_size: {cache_block_size}')
         num_gpu_blocks = int(
             (total_gpu_memory * self.cache_config.gpu_memory_utilization -
              peak_memory) // cache_block_size)
@@ -180,6 +182,7 @@ class Worker(WorkerBase):
             self.model_runner.remove_all_loras()
         gc.collect()
         torch.cuda.empty_cache()
+        print(f'total_gpu_memory: {total_gpu_memory}, self.cache_config.gpu_memory_utilization: {self.cache_config.gpu_memory_utilization}, peak_memory: {peak_memory}, cache_block_size: {cache_block_size}, num_gpu_blocks: {num_gpu_blocks}, num_cpu_blocks: {num_cpu_blocks}')
         return num_gpu_blocks, num_cpu_blocks
 
     def initialize_cache(self, num_gpu_blocks: int,
@@ -203,6 +206,7 @@ class Worker(WorkerBase):
         self.cache_engine = CacheEngine(self.cache_config, self.model_config,
                                         self.parallel_config)
         self.gpu_cache = self.cache_engine.gpu_cache
+        # print(f'initialize_cache: self.gpu_cache.length: {len(self.gpu_cache)}')
 
     def _warm_up_model(self) -> None:
         if not self.model_config.enforce_eager:
@@ -266,6 +270,12 @@ class Worker(WorkerBase):
             "blocks_to_copy": blocks_to_copy,
         }
         broadcast_tensor_dict(data, src=0)
+
+        print(f"len(blocks_to_swap_in): {len(blocks_to_swap_in)}, "
+              f"len(blocks_to_copy): {len(blocks_to_copy)}, "
+              f"len(blocks_to_swap_out): {len(blocks_to_swap_out)}")
+        # print(f"worker: blocks_to_swap_out: {blocks_to_swap_out}")
+        # print(f"worker: blocks_to_swap_in: {blocks_to_swap_in}")
 
         self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
 

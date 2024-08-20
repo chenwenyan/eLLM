@@ -154,9 +154,12 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             return None
 
         if self._cached_decode_metadata is not None:
+            print(f'cached_decode_metadata-self.seq_lens is {self.seq_lens}')
+            self._cached_decode_metadata.seq_lens = self.seq_lens
             return self._cached_decode_metadata
         assert self.block_tables is not None
         assert self.seq_lens_tensor is not None
+        
 
         self._cached_decode_metadata = XFormersMetadata(
             num_prefills=0,
@@ -164,6 +167,7 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             num_decode_tokens=self.num_decode_tokens,
             slot_mapping=self.slot_mapping[self.num_prefill_tokens:],
             seq_lens=None,
+            # seq_lens=self.seq_lens,
             seq_lens_tensor=self.seq_lens_tensor[self.num_prefills:],
             max_query_len=None,
             max_prefill_seq_len=0,
@@ -257,8 +261,12 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         value = value.view(-1, self.num_kv_heads, self.head_size)
 
         if kv_cache is not None:
+            # print(f'kv_cache is {kv_cache.shape}')
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
+            
+            # print(f'key_cache is {key_cache.shape}, value_cache is {value_cache.shape}')
+            # print(f'key is {key.shape}, value is {value.shape}')
 
             # Reshape the input keys and values and store them in the cache.
             # If kv_cache is not provided, the new key and value tensors are
@@ -276,15 +284,16 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         output = torch.empty_like(query)
         # Query for decode. KV is not needed because it is already cached.
         decode_query = query[num_prefill_tokens:]
-        # QKV for prefill.
-        query = query[:num_prefill_tokens]
-        key = key[:num_prefill_tokens]
-        value = value[:num_prefill_tokens]
-
-        assert query.shape[0] == num_prefill_tokens
         assert decode_query.shape[0] == num_decode_tokens
 
         if prefill_meta := attn_metadata.prefill_metadata:
+            seq_lens = attn_metadata.seq_lens
+
+            # QKV for prefill.
+            query = query[:num_prefill_tokens]
+            key = key[:num_prefill_tokens]
+            value = value[:num_prefill_tokens]
+            assert query.shape[0] == num_prefill_tokens
             # Prompt run.
             if kv_cache is None or prefill_meta.block_tables.numel() == 0:
                 # normal attention.
@@ -316,23 +325,134 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 assert output[:num_prefill_tokens].shape == out.shape
                 output[:num_prefill_tokens] = out
 
-        if decode_meta := attn_metadata.decode_metadata:
-            output[num_prefill_tokens:] = PagedAttention.forward_decode(
-                decode_query,
-                key_cache,
-                value_cache,
-                decode_meta.block_tables,
-                decode_meta.seq_lens_tensor,
-                decode_meta.max_decode_seq_len,
-                self.kv_cache_dtype,
-                self.num_kv_heads,
-                self.scale,
-                self.alibi_slopes,
-                kv_scale,
-            )
 
-        # Reshape the output tensor.
+        
+        if decode_meta := attn_metadata.decode_metadata:
+            if kv_cache is None:
+                # normal attention.
+                print(f'key is {key.shape}, value is {value.shape}, decode_query is {decode_query.shape}')
+                output[num_prefill_tokens:] = PagedAttention.forward_decode_with_dynamic_kv(
+                    decode_query,
+                    key,
+                    value,
+                    decode_meta.block_tables,
+                    decode_meta.seq_lens_tensor,
+                    decode_meta.max_decode_seq_len,
+                    self.num_kv_heads,
+                    self.scale,
+                    self.alibi_slopes,
+                    )
+
+                # output = self._run_memory_efficient_xformers_forward_decode(
+                #     decode_query,
+                #     key,
+                #     value,
+                #     decode_meta,
+                # )
+
+            else:    
+                output[num_prefill_tokens:] = PagedAttention.forward_decode(
+                    decode_query,
+                    key_cache,
+                    value_cache,
+                    decode_meta.block_tables,
+                    decode_meta.seq_lens_tensor,
+                    decode_meta.max_decode_seq_len,
+                    self.kv_cache_dtype,
+                    self.num_kv_heads,
+                    self.scale,
+                    self.alibi_slopes,
+                    kv_scale,
+                )
         return output.view(-1, self.num_heads * self.head_size)
+    
+
+    def _run_memory_efficient_xformers_forward_decode(
+            self,
+            query: torch.Tensor,
+            key: torch.Tensor,  
+            value: torch.Tensor,
+            attn_metadata: XFormersMetadata,
+        ) -> torch.Tensor:
+
+        print(f'attn_metadata is {attn_metadata}')
+        original_query = query
+
+        if self.num_kv_heads != self.num_heads:
+            query = query.view(query.shape[0], self.num_kv_heads,
+                            self.num_queries_per_kv, query.shape[-1])
+            key = key[:, :, None, :].expand(key.shape[0], self.num_kv_heads,
+                                            self.num_queries_per_kv, key.shape[-1])
+            value = value[:, :, None, :].expand(value.shape[0], self.num_kv_heads,
+                                                self.num_queries_per_kv, value.shape[-1])
+
+        # Set attention bias if not provided. This typically happens at
+        # the very attention layer of every iteration.
+        # FIXME(woosuk): This is a hack.
+        if attn_metadata.attn_bias is None:
+            if self.alibi_slopes is None:
+                # 生成一个512长度的值为1的seq_lens
+                import numpy as np
+                seq_lens = np.ones(512)
+                attn_metadata.seq_lens = seq_lens.tolist()
+                # 将list中的值转为int
+                attn_metadata.seq_lens = [int(i*4) for i in attn_metadata.seq_lens]
+                attn_bias = BlockDiagonalCausalMask.from_seqlens(attn_metadata.seq_lens)
+                
+                print(f'Decode:AttentionBias.from_seqlens attn_bias is {attn_bias}')
+                if self.sliding_window is not None:
+                    attn_bias = attn_bias.make_local_attention(
+                        self.sliding_window)
+                attn_metadata.attn_bias = [attn_bias]
+                print(f'Decode:attn_metadata.attn_bias is {attn_metadata.attn_bias}')
+            else:
+                attn_metadata.attn_bias = _make_alibi_bias(
+                    self.alibi_slopes, self.num_kv_heads, query.dtype,
+                    attn_metadata.seq_lens)
+            print(f'Decode:After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
+
+        # No alibi slopes.
+        # TODO(woosuk): Too many view operations. Let's try to reduce
+        # them in the future for code readability.
+        if self.alibi_slopes is None:
+            # Add the batch dimension.
+            query = query.unsqueeze(0)
+            key = key.unsqueeze(0)
+            value = value.unsqueeze(0)
+            # print(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
+            out = xops.memory_efficient_attention_forward(
+                query,
+                key,
+                value,
+                attn_bias=attn_metadata.attn_bias[0],
+                p=0.0,
+                scale=self.scale)
+            return out.view_as(original_query)
+
+        # Attention with alibi slopes.
+        # FIXME(woosuk): Because xformers does not support dynamic sequence
+        # lengths with custom attention bias, we process each prompt one by
+        # one. This is inefficient, especially when we have many short prompts.
+        output = torch.empty_like(original_query)
+        start = 0
+        for i, seq_len in enumerate(attn_metadata.seq_lens):
+            end = start + seq_len
+            out = xops.memory_efficient_attention_forward(
+                query[None, start:end],
+                key[None, start:end],
+                value[None, start:end],
+                attn_bias=attn_metadata.attn_bias[i],
+                p=0.0,
+                scale=self.scale)
+            # TODO(woosuk): Unnecessary copy. Optimize.
+            output[start:end].copy_(out.view_as(original_query[start:end]))
+            start += seq_len
+        return output
+
+    def _make_alibi_bias_single_step(self, alibi_slopes, num_kv_heads, dtype):
+        # Assuming alibi_slopes is already computed for all heads
+        alibi_bias = alibi_slopes.view(1, num_kv_heads, 1)
+        return alibi_bias.to(dtype)
 
     def _run_memory_efficient_xformers_forward(
         self,
@@ -376,14 +496,17 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             if self.alibi_slopes is None:
                 attn_bias = BlockDiagonalCausalMask.from_seqlens(
                     attn_metadata.seq_lens)
+                # print(f'BlockDiagonalCausalMask.from_seqlens attn_bias is {attn_bias}')
                 if self.sliding_window is not None:
                     attn_bias = attn_bias.make_local_attention(
                         self.sliding_window)
                 attn_metadata.attn_bias = [attn_bias]
+                # print(f'attn_metadata.attn_bias is {attn_metadata.attn_bias}')
             else:
                 attn_metadata.attn_bias = _make_alibi_bias(
                     self.alibi_slopes, self.num_kv_heads, query.dtype,
                     attn_metadata.seq_lens)
+            # print(f'After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
 
         # No alibi slopes.
         # TODO(woosuk): Too many view operations. Let's try to reduce
@@ -393,6 +516,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
+            # print(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
             out = xops.memory_efficient_attention_forward(
                 query,
                 key,

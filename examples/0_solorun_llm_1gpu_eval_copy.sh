@@ -11,7 +11,7 @@ export TORCH_USE_CUDA_DSA=on
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=0
+gpu_id=1
 # gpu_memory_utilizations=(0.1)
 # gpu_memory_utilizations=(0.2)
 # gpu_memory_utilizations=(0.4)
@@ -20,8 +20,8 @@ store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 
 # models=(facebook/opt-30b meta-llama/Llama-2-7b-hf meta-llama/Llama-2-13b-hf)
 # models=(facebook/opt-2.7b)
-# models=(meta-llama/Llama-2-7b-hf)
-models=(meta-llama/Llama-2-13b-hf)
+models=(meta-llama/Llama-2-7b-hf)
+# models=(meta-llama/Llama-2-13b-hf)
 request_rates=(50 100 150 200 250 300)
 num_prompts=(300)
 max_num_seqs=512
@@ -49,7 +49,7 @@ for i in "${!models[@]}"; do
             for store_cache_layers in ${store_cache_layerss[@]}; do
                 CUDA_VISIBLE_DEVICES=${gpu_id} python3 -m vllm.entrypoints.openai.api_server \
                     --model ${model} \
-                    --port 8081 \
+                    --port 8080 \
                     --tensor-parallel-size 1 \
                     --swap-space 4 \
                     --gpu-memory-utilization ${gpu_memory_utilization} \
@@ -59,12 +59,12 @@ for i in "${!models[@]}"; do
                     # > server.log 2>&1 &
                     # 
                 pid=$!    
-                wait_for_server 8081
+                wait_for_server 8080
                 sleep 1
 
                 python3 ../benchmarks/benchmark_serving.py \
                     --model ${model} \
-                    --port 8081 \
+                    --port 8080 \
                     --dataset ${dataset_path} \
                     --request-rate ${request_rate} \
                     --num-prompts ${num_prompt} \

@@ -298,7 +298,9 @@ class Sequence:
             num_empty_slots = last_block.get_num_empty_slots()
             last_block.append_tokens(token_ids[cursor:cursor +
                                                num_empty_slots])
+            print(f"Appending tokens to block: {token_ids[cursor:cursor + num_empty_slots]}")
             cursor += num_empty_slots
+        print(f"Logical token blocks: {self.logical_token_blocks[-1].token_ids}")    
 
     def append_token_id(
         self,

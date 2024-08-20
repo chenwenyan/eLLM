@@ -91,6 +91,7 @@ class EngineArgs:
     ngram_prompt_lookup_max: Optional[int] = None
     ngram_prompt_lookup_min: Optional[int] = None
     preemption_mode: Optional[str] = None
+    store_cache_layers: float = 1.0
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -545,6 +546,12 @@ class EngineArgs:
             type=str,
             default=EngineArgs.preemption_mode,
             help='The preempted mode to use for the model.')
+        
+        parser.add_argument(
+            '--store-cache-layers',
+            type=float,
+            default=EngineArgs.store_cache_layers,
+            help='The fraction of layers to store kv cache.')
 
         return parser
 
@@ -572,7 +579,8 @@ class EngineArgs:
                                    self.swap_space, self.kv_cache_dtype,
                                    self.num_gpu_blocks_override,
                                    model_config.get_sliding_window(),
-                                   self.enable_prefix_caching)
+                                   self.enable_prefix_caching,
+                                   self.store_cache_layers)
         parallel_config = ParallelConfig(
             self.pipeline_parallel_size,
             self.tensor_parallel_size,

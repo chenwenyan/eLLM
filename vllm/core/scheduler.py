@@ -270,6 +270,7 @@ class Scheduler:
         if self.scheduler_config.embedding_mode:
             version = "embedding"
 
+        # print(f"Using block manager version: {version}")
         BlockSpaceManagerImpl = BlockSpaceManager.get_block_space_manager_class(
             version)
 
@@ -1161,8 +1162,12 @@ class Scheduler:
             raise RuntimeError(
                 "Aborted due to the lack of CPU swap space. Please increase "
                 "the swap space to avoid this error.")
+        # print(f"seq_group: {seq_group.request_id}, seq_group.get_seqs(status=SequenceStatus.RUNNING): {seq_group.get_seqs(status=SequenceStatus.RUNNING)}, seq_group.get_seqs(): {seq_group.get_seqs()}, seq_group.embeedings: {seq_group.embeddings}")
+
         mapping = self.block_manager.swap_out(seq_group)
+        # print(f"blocks_to_swap_out: {blocks_to_swap_out}")
         blocks_to_swap_out.extend(mapping)
+        print(f"After mapping, blocks_to_swap_out: {blocks_to_swap_out}")
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             seq.status = SequenceStatus.SWAPPED
 

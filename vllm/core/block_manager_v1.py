@@ -86,6 +86,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
 
     def allocate_block(self, block_hash: int,
                        num_hashed_tokens: int) -> PhysicalTokenBlock:
+        print(f'self.current_num_blocks is {self.current_num_blocks}, self.num_blocks is {self.num_blocks}')
         if self.current_num_blocks == self.num_blocks:
             block = self.evictor.evict()
             block.block_hash = block_hash
@@ -501,6 +502,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
             cpu_block.block_number: gpu_block.block_number
             for cpu_block, gpu_block in mapping.items()
         }
+        # print('After swap_in:')
+        # print(f'self.free_gpu_blocks are: {self.get_num_free_gpu_blocks()}')
+        # print(f'self.free_cpu_blocks are: {self.get_num_free_cpu_blocks()}')
         # convert to list of tuples once here
         return list(block_number_mapping.items())
 
@@ -515,8 +519,15 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             new_block_table: BlockTable = []
             block_table = self.block_tables[seq.seq_id]
+            # print(f'block_table: {block_table}')
 
             for gpu_block in block_table:
+                # print(f'gpu_block: {gpu_block}')
+                # print(f'gpu_block.block_number: {gpu_block.block_number}')
+                # print(f'gpu_block.block_hash: {gpu_block.block_hash}')
+                # print(f'gpu_block.num_hashed_tokens: {gpu_block.num_hashed_tokens}')
+
+
                 if gpu_block in mapping:
                     cpu_block = mapping[gpu_block]
                     cpu_block.ref_count += 1
@@ -524,6 +535,7 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                     cpu_block = self.cpu_allocator.allocate(
                         gpu_block.block_hash, gpu_block.num_hashed_tokens)
                     mapping[gpu_block] = cpu_block
+                    # print(f'cpu_block: {cpu_block}')
                 new_block_table.append(cpu_block)
                 # Free the GPU block swapped out to CPU.
                 self.gpu_allocator.free(gpu_block)
@@ -533,6 +545,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
             gpu_block.block_number: cpu_block.block_number
             for gpu_block, cpu_block in mapping.items()
         }
+        # print('After swap_out:')
+        # print(f'self.free_gpu_blocks are: {self.get_num_free_gpu_blocks()}')
+        # print(f'self.free_cpu_blocks are: {self.get_num_free_cpu_blocks()}')
         # convert to list of tuples once here
         return list(block_number_mapping.items())
 

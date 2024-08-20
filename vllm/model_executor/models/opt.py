@@ -104,6 +104,8 @@ class OPTAttention(nn.Module):
         q, k, v = qkv.chunk(chunks=3, dim=-1)
         attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
         output, _ = self.out_proj(attn_output)
+        # print(f"output: {output.shape}")
+        # print(f"output: {output}")
         return output
 
 
@@ -195,6 +197,7 @@ class OPTDecoder(nn.Module):
         self.padding_idx = config.pad_token_id
         self.max_target_positions = config.max_position_embeddings
         self.vocab_size = config.vocab_size
+        self.cache_config = cache_config
 
         self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
@@ -250,16 +253,23 @@ class OPTDecoder(nn.Module):
             inputs_embeds, _ = self.project_in(inputs_embeds)
         hidden_states = inputs_embeds + pos_embeds
 
-        for i in range(len(self.layers)):
+        # for i in range(len(self.layers)):
+        for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)):
             layer = self.layers[i]
             hidden_states = layer(hidden_states, kv_caches[i], attn_metadata)
+
+        if self.cache_config.store_cache_layers < 1:
+            for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
+                # recomputing kv_caches for the layers that are not stored
+                kv_cache = None
+                hidden_states = self.layers[i](hidden_states, kv_cache, attn_metadata)
+                # break
 
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
         if self.project_out is not None:
             hidden_states, _ = self.project_out(hidden_states)
         return hidden_states
-
 
 class OPTModel(nn.Module):
 

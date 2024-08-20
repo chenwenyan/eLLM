@@ -267,6 +267,7 @@ class LlamaModel(nn.Module):
             for _ in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.cache_config = cache_config
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -284,7 +285,8 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        for i in range(len(self.layers)):
+        for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)):
+        # for i in range(len(self.layers)):
             layer = self.layers[i]
             hidden_states, residual = layer(
                 positions,
@@ -292,7 +294,20 @@ class LlamaModel(nn.Module):
                 kv_caches[i],
                 attn_metadata,
                 residual,
-            )
+            ) 
+        if self.cache_config.store_cache_layers < 1:
+            for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
+                layer = self.layers[i]
+                # recomputing kv_caches for the layers that are not stored
+                kv_cache = None
+                hidden_states, residual = layer(
+                positions,
+                hidden_states,
+                kv_cache,
+                attn_metadata,
+                residual,
+                )  
+  
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
