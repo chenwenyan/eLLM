@@ -1,30 +1,38 @@
-# cd ../
-# bash compile.sh
-# cd examples
+cd ../
+bash compile.sh
+cd examples
 
 pip uninstall -y vllm-flash-attn
 
 export CUDA_LAUNCH_BLOCKING=1
-# export TORCH_USE_CUDA_DSA=1
 export TORCH_USE_CUDA_DSA=on
+export CUDA_LAUNCH_BLOCKING_WAIT=1
+export VLLM_LOGGING_LEVEL=DEBUG
+# export NCCL_DEBUG=TRACE
+# export VLLM_TRACE_FUNCTION=1
+
 
 # pgrep -f 'api_server' | xargs kill -9
 
-preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=0
-# gpu_memory_utilizations=(0.1)
+preemption_mode=recompute # 1: swap 2: recomputation
+gpu_id=3
+gpu_memory_utilizations=(0.1)
 # gpu_memory_utilizations=(0.2)
 # gpu_memory_utilizations=(0.4)
-gpu_memory_utilizations=(0.9)
-store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
+# gpu_memory_utilizations=(0.9)
+# store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
+store_cache_layerss=(0.0625 0.125 0.25 0.5 0.75 1.0)
+# store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 
 # models=(facebook/opt-30b meta-llama/Llama-2-7b-hf meta-llama/Llama-2-13b-hf)
-# models=(facebook/opt-2.7b)
+models=(facebook/opt-2.7b)
 # models=(meta-llama/Llama-2-7b-hf)
-models=(meta-llama/Llama-2-13b-hf)
-request_rates=(50 100 150 200 250 300)
+# models=(meta-llama/Llama-2-13b-hf)
+# request_rates=(50 100 150 200 250 300)
+request_rates=(300)
 num_prompts=(300)
 max_num_seqs=512
+# max_num_seqs=1024
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 
 wait_for_server() {
@@ -47,17 +55,16 @@ for i in "${!models[@]}"; do
     for request_rate in ${request_rates[@]}; do
         for num_prompt in ${num_prompts[@]}; do
             for store_cache_layers in ${store_cache_layerss[@]}; do
-                CUDA_VISIBLE_DEVICES=${gpu_id} python3 -m vllm.entrypoints.openai.api_server \
+                CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 12-13 python3 -m vllm.entrypoints.openai.api_server \
                     --model ${model} \
                     --port 8081 \
                     --tensor-parallel-size 1 \
-                    --swap-space 4 \
+                    --swap-space 0 \
                     --gpu-memory-utilization ${gpu_memory_utilization} \
                     --store-cache-layers ${store_cache_layers} \
                     --max-num-seqs ${max_num_seqs} \
-                    --preemption-mode ${preemption_mode} --disable-log-requests > logs/1gpu/test_${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}.log & 
-                    # > server.log 2>&1 &
-                    # 
+                    --enforce-eager \
+                    --preemption-mode ${preemption_mode} --disable-log-requests > test_res/1gpu/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}.log & 
                 pid=$!    
                 wait_for_server 8081
                 sleep 1
@@ -70,7 +77,7 @@ for i in "${!models[@]}"; do
                     --num-prompts ${num_prompt} \
                     --save-result \
                     --result-dir results/swap_recompute \
-                    --endpoint /v1/completions >> logs/1gpu/test_${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}.log 
+                    --endpoint /v1/completions > test_res/1gpu/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}.log    
                 kill -9 $pid 
                 sleep 1
             done      
