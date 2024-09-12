@@ -154,7 +154,7 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             return None
 
         if self._cached_decode_metadata is not None:
-            print(f'cached_decode_metadata-self.seq_lens is {self.seq_lens}')
+            # print(f'cached_decode_metadata-self.seq_lens is {self.seq_lens}')
             self._cached_decode_metadata.seq_lens = self.seq_lens
             return self._cached_decode_metadata
         assert self.block_tables is not None
@@ -261,7 +261,6 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         value = value.view(-1, self.num_kv_heads, self.head_size)
 
         if kv_cache is not None:
-            # print(f'kv_cache is {kv_cache.shape}')
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
             
@@ -294,6 +293,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             key = key[:num_prefill_tokens]
             value = value[:num_prefill_tokens]
             assert query.shape[0] == num_prefill_tokens
+            
             # Prompt run.
             if kv_cache is None or prefill_meta.block_tables.numel() == 0:
                 # normal attention.
@@ -330,7 +330,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         if decode_meta := attn_metadata.decode_metadata:
             if kv_cache is None:
                 # normal attention.
-                print(f'key is {key.shape}, value is {value.shape}, decode_query is {decode_query.shape}')
+                # print(f'key is {key.shape}, value is {value.shape}, decode_query is {decode_query.shape}')
                 output[num_prefill_tokens:] = PagedAttention.forward_decode_with_dynamic_kv(
                     decode_query,
                     key,
@@ -419,7 +419,8 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
-            # print(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
+
+            
             out = xops.memory_efficient_attention_forward(
                 query,
                 key,
@@ -427,6 +428,8 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 attn_bias=attn_metadata.attn_bias[0],
                 p=0.0,
                 scale=self.scale)
+            print(f'Decode:out.shape is {out.shape}')
+
             return out.view_as(original_query)
 
         # Attention with alibi slopes.
@@ -516,6 +519,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
+            
             # print(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
             out = xops.memory_efficient_attention_forward(
                 query,

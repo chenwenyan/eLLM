@@ -206,7 +206,7 @@ class Worker(WorkerBase):
         self.cache_engine = CacheEngine(self.cache_config, self.model_config,
                                         self.parallel_config)
         self.gpu_cache = self.cache_engine.gpu_cache
-        # print(f'initialize_cache: self.gpu_cache.length: {len(self.gpu_cache)}')
+        print(f'initialize_cache: self.gpu_cache.length: {len(self.gpu_cache)}')
 
     def _warm_up_model(self) -> None:
         if not self.model_config.enforce_eager:
@@ -229,6 +229,34 @@ class Worker(WorkerBase):
         if blocks_to_copy.numel() > 0:
             self.cache_engine.copy(blocks_to_copy)
 
+    def get_used_layer_ids(self, total_block_ids):
+        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
+        used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
+                                          for block_ids in total_block_ids]
+        used_start_layers_ids = max(used_start_layers_ids)
+        used_layer_ids = []
+        for i in range(store_cache_layer_num):
+            tmp = []
+            for j in range(used_start_layers_ids+1):
+                tmp.append(i+j*store_cache_layer_num)
+            used_layer_ids.append(tmp) 
+        return used_layer_ids
+
+    def reshape_kv_cache(self, used_layer_ids):
+        print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
+        reshaped_cache = []
+        for layer_ids in used_layer_ids:
+            reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
+        return reshaped_cache
+
+    def split_gpu_cache(self, used_layer_ids, reshaped_caches):
+        split_nums = len(used_layer_ids[0])
+        for i in range(len(used_layer_ids)):
+            reshaped_cache=reshaped_caches[i]
+            split_caches = torch.split(reshaped_cache, split_nums)
+            for index, j in enumerate(used_layer_ids[i]):
+                self.gpu_cache[j] = split_caches[index]
+            
     @torch.inference_mode()
     def execute_model(
         self,
@@ -246,7 +274,18 @@ class Worker(WorkerBase):
             # execution loop.
             broadcast_tensor_dict({}, src=0)
             return []
-
+        # print(f'After transfered->execute_model_req.total_block_ids: {execute_model_req.total_block_ids}, len(execute_model_req.total_block_ids): {len(execute_model_req.total_block_ids)}')
+        st = torch.cuda.Event(enable_timing=True)
+        st.record()
+        used_layer_ids = self.get_used_layer_ids(execute_model_req.total_block_ids)
+        # print(f'used_layer_ids: {used_layer_ids}')
+        # If there is no input, we don't need to execute the model.
+        reshaped_gpu_cache = self.reshape_kv_cache(used_layer_ids)
+        # self.cache_engine.cpu_cache = self.reshape_kv_cache(used_layer_ids)
+        et = torch.cuda.Event(enable_timing=True)
+        et.record()
+        torch.cuda.synchronize()
+        print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
         # `blocks_to_swap_in` and `blocks_to_swap_out` are cpu tensors.
@@ -271,23 +310,19 @@ class Worker(WorkerBase):
         }
         broadcast_tensor_dict(data, src=0)
 
-        print(f"len(blocks_to_swap_in): {len(blocks_to_swap_in)}, "
-              f"len(blocks_to_copy): {len(blocks_to_copy)}, "
-              f"len(blocks_to_swap_out): {len(blocks_to_swap_out)}")
-        # print(f"worker: blocks_to_swap_out: {blocks_to_swap_out}")
-        # print(f"worker: blocks_to_swap_in: {blocks_to_swap_in}")
-
         self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
-
-        # If there is no input, we don't need to execute the model.
+        
         if num_seq_groups == 0:
             return []
-
+        
         output = self.model_runner.execute_model(seq_group_metadata_list,
-                                                 self.gpu_cache)
+                                                    reshaped_gpu_cache)
+
 
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.
+        # self.split_gpu_cache(used_layer_ids, reshaped_gpu_cache)
+
         return [output]
 
     @torch.inference_mode()

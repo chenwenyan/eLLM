@@ -677,9 +677,12 @@ class LLMEngine:
                 blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
                 blocks_to_swap_out=scheduler_outputs.blocks_to_swap_out,
                 blocks_to_copy=scheduler_outputs.blocks_to_copy,
+                total_block_ids=scheduler_outputs.total_block_ids,
                 num_lookahead_slots=scheduler_outputs.num_lookahead_slots,
                 running_queue_size=scheduler_outputs.running_queue_size,
             )
+            execute_model_req.total_block_ids = scheduler_outputs.total_block_ids
+            print("execute_model_req.total_block_ids: ", execute_model_req.total_block_ids)
             output = self.model_executor.execute_model(
                 execute_model_req=execute_model_req)
         else:
@@ -733,17 +736,20 @@ class LLMEngine:
 
         # KV Cache Usage in %
         num_total_gpu = self.cache_config.num_gpu_blocks
+        num_total_gpu = num_total_gpu * (1 / self.scheduler.block_manager.store_cache_layers) 
         gpu_cache_usage_sys = 0.
-        if num_total_gpu is not None:
-            num_free_gpu = self.scheduler.block_manager.get_num_free_gpu_blocks(
-            )
-            gpu_cache_usage_sys = 1.0 - (num_free_gpu / num_total_gpu)
+        num_free_gpu = self.scheduler.block_manager.get_num_free_gpu_blocks()
+        print("num_free_gpu: ", num_free_gpu, "num_total_gpu: ", num_total_gpu)
+        if num_total_gpu is not None and num_total_gpu > 0:
+            gpu_cache_usage_sys = 1.0 - (num_free_gpu / num_total_gpu)  
 
         num_total_cpu = self.cache_config.num_cpu_blocks
+        num_total_cpu = num_total_cpu * (1 / self.scheduler.block_manager.store_cache_layers)
         cpu_cache_usage_sys = 0.
         if num_total_cpu is not None and num_total_cpu > 0:
             num_free_cpu = self.scheduler.block_manager.get_num_free_cpu_blocks(
             )
+            print("num_free_cpu: ", num_free_cpu, "num_total_cpu: ", num_total_cpu)
             cpu_cache_usage_sys = 1.0 - (num_free_cpu / num_total_cpu)
 
         # Iteration stats

@@ -70,8 +70,8 @@ class CacheEngine:
         print(f'kv_cache_shape: {kv_cache_shape}')
         pin_memory = is_pin_memory_available() if device == "cpu" else False
         kv_cache: List[torch.Tensor] = []
-        # for _ in range(self.num_layers):
-        for _ in range(int(self.num_layers*self.store_cache_layers)):
+        for _ in range(self.num_layers):
+        # for _ in range(int(self.num_layers*self.store_cache_layers)):
             kv_cache.append(
                 torch.empty(kv_cache_shape,
                             dtype=self.dtype,
@@ -80,20 +80,22 @@ class CacheEngine:
         return kv_cache
 
     def swap_in(self, src_to_dst: torch.Tensor) -> None:
-        # for i in range(self.num_layers):
-        #     self.attn_backend.swap_blocks(self.cpu_cache[i], self.gpu_cache[i],
-        #                                   src_to_dst)
-        for i in range(int(self.num_layers*self.store_cache_layers)):
+        for i in range(self.num_layers):
             self.attn_backend.swap_blocks(self.cpu_cache[i], self.gpu_cache[i],
                                           src_to_dst)
+        # TODO: Wenyan: swap in all layers; reshape the cache
+        # for i in range(int(self.num_layers*self.store_cache_layers)):
+            # self.attn_backend.swap_blocks(self.cpu_cache[i], self.gpu_cache[i],
+            #                               src_to_dst)
 
     def swap_out(self, src_to_dst: torch.Tensor) -> None:
-        # for i in range(int(self.num_layers)):
-        #     self.attn_backend.swap_blocks(self.gpu_cache[i], self.cpu_cache[i],
-        #                                   src_to_dst)
-        for i in range(int(self.num_layers*self.store_cache_layers)):
+        for i in range(int(self.num_layers)):
             self.attn_backend.swap_blocks(self.gpu_cache[i], self.cpu_cache[i],
                                           src_to_dst)
+        # TODO: Wenyan: swap out all layers
+        # for i in range(int(self.num_layers*self.store_cache_layers)):
+        #     self.attn_backend.swap_blocks(self.gpu_cache[i], self.cpu_cache[i],
+        #                                   src_to_dst)
             
             
     def copy(self, src_to_dsts: torch.Tensor) -> None:
@@ -114,6 +116,8 @@ class CacheEngine:
         value_cache_block = key_cache_block
         # 1. total block size is the original num_layers * key_cache_block + value_cache_block 
         total = num_layers * (key_cache_block + value_cache_block)
+        # print(f'store_cache_layers_number: {int(num_layers*cache_config.store_cache_layers)}')
+        # total = int(num_layers*cache_config.store_cache_layers) * (key_cache_block + value_cache_block)
         # 2. Wenyan: total block size is the pruned num_layers * key_cache_block + value_cache_block
         # print(f'store_cache_layers: {cache_config.store_cache_layers}')
         # total = int(num_layers*cache_config.store_cache_layers) * (key_cache_block + value_cache_block)

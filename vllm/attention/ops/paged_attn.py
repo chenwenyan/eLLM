@@ -50,12 +50,14 @@ class PagedAttention:
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         x = 16 // kv_cache.element_size()
         num_blocks = kv_cache.shape[1]
+        # print(f"num_blocks: {num_blocks}, num_kv_heads: {num_kv_heads}, head_size: {head_size}, x: {x}")
 
         key_cache = kv_cache[0]
-        key_cache = key_cache.view(num_blocks, num_kv_heads, head_size // x,
-                                   -1, x)
+        # key_cache = key_cache.view(num_blocks, num_kv_heads, head_size // x, -1, x)
+        key_cache = key_cache.view(num_blocks, num_kv_heads, head_size // x, -1, x).contiguous()
         value_cache = kv_cache[1]
-        value_cache = value_cache.view(num_blocks, num_kv_heads, head_size, -1)
+        # value_cache = value_cache.view(num_blocks, num_kv_heads, head_size, -1)
+        value_cache = value_cache.view(num_blocks, num_kv_heads, head_size, -1).contiguous()
         # print(f"num_blocks: {num_blocks}, num_kv_heads: {num_kv_heads}, head_size: {head_size}, x: {x}")
         # print(f"key_cache: {key_cache.shape}, value_cache: {value_cache.shape}")
         return key_cache, value_cache

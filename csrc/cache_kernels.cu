@@ -78,6 +78,8 @@ __global__ void copy_blocks_kernel(int64_t* key_cache_ptrs,
       reinterpret_cast<scalar_t*>(value_cache_ptrs[layer_idx]);
   int64_t src_block_number = block_mapping[2 * pair_idx];
   int64_t dst_block_number = block_mapping[2 * pair_idx + 1];
+  // print out the block number
+  printf("src_block_number: %d, dst_block_number: %d\n", src_block_number, dst_block_number);
 
   const int64_t src_block_offset = src_block_number * numel_per_block;
   const int64_t dst_block_offset = dst_block_number * numel_per_block;

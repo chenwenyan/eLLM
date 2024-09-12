@@ -66,7 +66,7 @@ def paged_attention_v1_with_dynamic_kv(
     
     from torch import nn    
     num_seqs, num_heads, head_size = query.shape
-    print(f'num_seqs: {num_seqs}, num_heads: {num_heads}, head_size: {head_size}, num_kv_heads: {num_kv_heads}')
+    # print(f'num_seqs: {num_seqs}, num_heads: {num_heads}, head_size: {head_size}, num_kv_heads: {num_kv_heads}')
     # num_seqs: 96, num_heads: 32, head_size: 80, num_kv_heads: 32
 
     # The first method
@@ -83,7 +83,7 @@ def paged_attention_v1_with_dynamic_kv(
     # attn_scores = attn_scores.masked_fill(causal_mask, float('-inf'))
     
 
-    print(f'alibi_slopes is: {alibi_slopes}')
+    # print(f'alibi_slopes is: {alibi_slopes}')
     # alibi_slopes 一种用于注意力分数偏置的方法,形状为 (nheads,) 或 (batch_size, nheads),数据类型为 fp32。例如,如果 nheads 为 4,则 alibi_slopes 可以是形状为 (4,) 的张量
     if alibi_slopes is not None:
         attn_scores += alibi_slopes.unsqueeze(1).unsqueeze(1)

@@ -173,8 +173,8 @@ class SequenceData:
         supposed to be called when a sequence needs to be started from
         the beginning again (e.g., sequence is preempted).
         """
-        print("Resetting state for recompute")
-        print(f'Prompt: {self.prompt_token_ids}, Output: {self.output_token_ids}')
+        # print("Resetting state for recompute")
+        # print(f'Prompt: {self.prompt_token_ids}, Output: {self.output_token_ids}')
         self._num_computed_tokens = 0
         self._stage = SequenceStage.PREFILL
 
@@ -298,9 +298,9 @@ class Sequence:
             num_empty_slots = last_block.get_num_empty_slots()
             last_block.append_tokens(token_ids[cursor:cursor +
                                                num_empty_slots])
-            print(f"Appending tokens to block: {token_ids[cursor:cursor + num_empty_slots]}")
+            # print(f"Appending tokens to block: {token_ids[cursor:cursor + num_empty_slots]}")
             cursor += num_empty_slots
-        print(f"Logical token blocks: {self.logical_token_blocks[-1].token_ids}")    
+        # print(f"Logical token blocks: {self.logical_token_blocks[-1].token_ids}")    
 
     def append_token_id(
         self,
@@ -835,6 +835,8 @@ class ExecuteModelRequest:
     blocks_to_swap_out: List[Tuple[int, int]] = field(default_factory=list)
     # Blocks to copy. Source to dest block.
     blocks_to_copy: List[Tuple[int, int]] = field(default_factory=list)
+    # record all block ids that are used in this iteration
+    total_block_ids: List[int] = field(default_factory=list)
     # The number of slots for lookahead decoding.
     num_lookahead_slots: int = 0
     # The number of requests in the running queue.
@@ -849,6 +851,7 @@ class ExecuteModelRequest:
             blocks_to_swap_in=self.blocks_to_swap_in.copy(),
             blocks_to_swap_out=self.blocks_to_swap_out.copy(),
             blocks_to_copy=self.blocks_to_copy.copy(),
+            total_block_ids=self.total_block_ids.copy(),
             num_lookahead_slots=self.num_lookahead_slots,
             running_queue_size=self.running_queue_size,
         )

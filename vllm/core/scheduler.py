@@ -123,6 +123,8 @@ class SchedulerOutputs:
     blocks_to_swap_out: List[Tuple[int, int]]
     # Blocks to copy. Source to dest block.
     blocks_to_copy: List[Tuple[int, int]]
+    # record all block ids that are used in this iteration
+    total_block_ids: List[int]
     # Sequence groups that are going to be ignored.
     ignored_seq_groups: List[SequenceGroup]
     # The number of slots for lookahead decoding.
@@ -178,6 +180,8 @@ class SchedulerRunningOutputs:
     blocks_to_swap_out: List[Tuple[int, int]]
     # The blocks to copy.
     blocks_to_copy: List[Tuple[int, int]]
+    # record all block ids that are used in this iteration
+    total_block_ids: List[int] 
     # The number of slots for lookahead decoding.
     num_lookahead_slots: int
 
@@ -190,6 +194,7 @@ class SchedulerRunningOutputs:
             swapped_out=[],
             blocks_to_swap_out=[],
             blocks_to_copy=[],
+            total_block_ids=[],
             num_lookahead_slots=0,
         )
 
@@ -210,6 +215,8 @@ class SchedulerSwappedInOutputs:
     blocks_to_swap_in: List[Tuple[int, int]]
     # The blocks to copy.
     blocks_to_copy: List[Tuple[int, int]]
+    # record all block ids that are used in this iteration
+    total_block_ids: List[int] 
     # The number of slots for lookahead decoding.
     num_lookahead_slots: int
     # Infeasible sequence groups.
@@ -222,6 +229,7 @@ class SchedulerSwappedInOutputs:
             prefill_seq_groups=[],
             blocks_to_swap_in=[],
             blocks_to_copy=[],
+            total_block_ids=[],
             num_lookahead_slots=0,
             infeasible_seq_groups=[],
         )
@@ -236,6 +244,7 @@ class SchedulerPrefillOutputs:
     """
     # Selected sequences for prefill.
     seq_groups: List[SequenceGroup]
+    total_block_ids: List[int]
     # Ignored sequence groups.
     ignored_seq_groups: List[SequenceGroup]
     num_lookahead_slots: int
@@ -244,6 +253,7 @@ class SchedulerPrefillOutputs:
     def create_empty(cls) -> "SchedulerPrefillOutputs":
         return SchedulerPrefillOutputs(
             seq_groups=[],
+            total_block_ids=[],
             ignored_seq_groups=[],
             num_lookahead_slots=0,
         )
@@ -280,7 +290,10 @@ class Scheduler:
             num_gpu_blocks=self.cache_config.num_gpu_blocks,
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
-            enable_caching=self.cache_config.enable_prefix_caching)
+            enable_caching=self.cache_config.enable_prefix_caching,
+            num_layers=32,
+            store_cache_layers=self.cache_config.store_cache_layers)
+
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.
@@ -426,14 +439,12 @@ class Scheduler:
                 if curr_loras is not None and seq_group.lora_int_id > 0:
                     curr_loras.remove(seq_group.lora_int_id)
 
-                logger.info(f'preempted_mode: {PreemptionMode.RECOMPUTE}, seq_group: {seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
-
                 if running_queue:
                     # Preempt the lowest-priority sequence groups.
                     victim_seq_group = running_queue.pop()
                     preempted_mode = self._preempt(victim_seq_group,
                                                    blocks_to_swap_out, preemption_mode=self.scheduler_config.preemption_mode)
-                    logger.info(f'preempted_mode: {preempted_mode}, victim_seq_group: {victim_seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
+                    logger.info(f'running_queue-preempted_mode: {preempted_mode}, victim_seq_group: {victim_seq_group.request_id}, and blocks_to_swap_out: {blocks_to_swap_out}')
 
                     if preempted_mode == PreemptionMode.RECOMPUTE:
                         preempted.append(victim_seq_group)
@@ -474,6 +485,15 @@ class Scheduler:
                     budget.add_num_seqs(seq_group.request_id, num_running_seqs)
                 if curr_loras is not None and seq_group.lora_int_id > 0:
                     curr_loras.add(seq_group.lora_int_id)
+        total_block_ids:List[int] = []
+        for seq_group in decode_seq_groups:
+            _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
+            total_block_ids.extend(_running_block_ids)
+        for seq_group in prefill_seq_groups:
+            _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
+            total_block_ids.extend(_running_block_ids)
+
+        # print(f"total_block_ids: {total_block_ids}")    
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -482,6 +502,7 @@ class Scheduler:
             swapped_out=swapped_out,
             blocks_to_swap_out=blocks_to_swap_out,
             blocks_to_copy=blocks_to_copy,
+            total_block_ids=total_block_ids,
             num_lookahead_slots=self._get_num_lookahead_slots(
                 is_prefill=False))
 
@@ -519,6 +540,7 @@ class Scheduler:
         # Blocks that need to be swapped or copied before model execution.
         blocks_to_swap_in: List[Tuple[int, int]] = []
         blocks_to_copy: List[Tuple[int, int]] = []
+        total_block_ids: List[int] = []
         decode_seq_groups: List[ScheduledSequenceGroup] = []
         prefill_seq_groups: List[ScheduledSequenceGroup] = []
         now = time.time()
@@ -572,7 +594,8 @@ class Scheduler:
             if lora_int_id > 0 and curr_loras is not None:
                 curr_loras.add(lora_int_id)
             swapped_queue.popleft()
-            self._swap_in(seq_group, blocks_to_swap_in)
+            # self._swap_in(seq_group, blocks_to_swap_in)
+            self._swap_in(seq_group, blocks_to_swap_in, total_block_ids)
             self._append_slots(seq_group, blocks_to_copy)
             is_prefill = seq_group.is_prefill()
             if is_prefill:
@@ -592,6 +615,7 @@ class Scheduler:
             prefill_seq_groups=prefill_seq_groups,
             blocks_to_swap_in=blocks_to_swap_in,
             blocks_to_copy=blocks_to_copy,
+            total_block_ids=total_block_ids,
             num_lookahead_slots=self._get_num_lookahead_slots(
                 is_prefill=False),
             infeasible_seq_groups=infeasible_seq_groups,
@@ -727,9 +751,14 @@ class Scheduler:
         waiting_queue.extendleft(leftover_waiting_sequences)
         if len(seq_groups) > 0:
             self.prev_prompt = True
-
+        total_block_ids:List[int] = []
+        for seq_group in seq_groups:
+            _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
+            print(f"seq_group: {seq_group.seq_group.request_id}, _running_block_ids: {_running_block_ids}")
+            total_block_ids.extend(_running_block_ids)
         return waiting_queue, SchedulerPrefillOutputs(
             seq_groups=seq_groups,
+            total_block_ids=total_block_ids,
             ignored_seq_groups=ignored_seq_groups,
             num_lookahead_slots=self._get_num_lookahead_slots(is_prefill=True))
 
@@ -820,6 +849,7 @@ class Scheduler:
             blocks_to_swap_out=running_scheduled.blocks_to_swap_out,
             blocks_to_copy=running_scheduled.blocks_to_copy +
             swapped_in.blocks_to_copy,
+            total_block_ids=running_scheduled.total_block_ids+swapped_in.total_block_ids+prefills.total_block_ids,
             ignored_seq_groups=prefills.ignored_seq_groups +
             swapped_in.infeasible_seq_groups,
             num_lookahead_slots=running_scheduled.num_lookahead_slots,
@@ -909,6 +939,7 @@ class Scheduler:
             blocks_to_swap_out=running_scheduled.blocks_to_swap_out,
             blocks_to_copy=running_scheduled.blocks_to_copy +
             swapped_in.blocks_to_copy,
+            total_block_ids=running_scheduled.total_block_ids+swapped_in.total_block_ids+prefills.total_block_ids,
             ignored_seq_groups=prefills.ignored_seq_groups,
             num_lookahead_slots=running_scheduled.num_lookahead_slots,
             running_queue_size=len(self.running),
@@ -1145,9 +1176,11 @@ class Scheduler:
         self,
         seq_group: SequenceGroup,
         blocks_to_swap_in: List[Tuple[int, int]],
+        total_block_ids: List[int],
     ) -> None:
         mapping = self.block_manager.swap_in(seq_group)
         blocks_to_swap_in.extend(mapping)
+        total_block_ids.extend([block_id for _, block_id in mapping])
         for seq in seq_group.get_seqs(status=SequenceStatus.SWAPPED):
             seq.status = SequenceStatus.RUNNING
 
@@ -1165,7 +1198,7 @@ class Scheduler:
         # print(f"seq_group: {seq_group.request_id}, seq_group.get_seqs(status=SequenceStatus.RUNNING): {seq_group.get_seqs(status=SequenceStatus.RUNNING)}, seq_group.get_seqs(): {seq_group.get_seqs()}, seq_group.embeedings: {seq_group.embeddings}")
 
         mapping = self.block_manager.swap_out(seq_group)
-        # print(f"blocks_to_swap_out: {blocks_to_swap_out}")
+        print(f"mapping: {mapping}")
         blocks_to_swap_out.extend(mapping)
         print(f"After mapping, blocks_to_swap_out: {blocks_to_swap_out}")
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):

@@ -433,7 +433,7 @@ class ModelRunner:
                     if i < start_idx:
                         slot_mapping.append(_PAD_SLOT_ID)
                         continue
-                    print(f'len(block_table): {len(block_table)}, i is {i}, self.block_size is {self.block_size}')
+                    # print(f'len(block_table): {len(block_table)}, i is {i}, self.block_size is {self.block_size}')
                     # Wenyan
                     block_number = block_table[i // (self.block_size)]
                     block_offset = i % (self.block_size)
@@ -572,6 +572,7 @@ class ModelRunner:
                 seq_start_loc=seq_start_loc,
                 data_type=kv_cache_dtype)
         else:
+            # print(f'self.attn_backend.get_name() is {self.attn_backend.get_name()}, and len(block_tables) is {len(block_tables)}, and len(seq_lens) is {len(seq_lens)}, and len(block_tables[0]) is {len(block_tables[0])}')
             # print(F'_prepare_model_input: seq_lens: {seq_lens}')
             attn_metadata = self.attn_backend.make_metadata(
                 num_prefills=num_prefills,
@@ -701,17 +702,21 @@ class ModelRunner:
             model_executable = self.graph_runners[graph_batch_size]
         else:
             model_executable = self.model
+        
+            
         execute_model_kwargs = {
             "input_ids": input_tokens,
             "positions": input_positions,
-            "kv_caches": kv_caches,
+            # TODO: concat kv_caches into 8 layers
+            "kv_caches": kv_caches, #8layer [[0,8,16,24],[1,9,17,25],...]
             "attn_metadata": attn_metadata,
         }
         # print(f'MODEL_RUNNER: attn_metadata.seq_lens is {attn_metadata.seq_lens}')
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
         hidden_states = model_executable(**execute_model_kwargs)
-
+        # TODO: split kv_caches into 32 layers
+        # kv_caches -> [0,1,2,3...]
         # Compute the logits.
         logits = self.model.compute_logits(hidden_states, sampling_metadata)
 
@@ -790,8 +795,8 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        # kv_caches = [None] * int(num_layers)
-        kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
+        kv_caches = [None] * int(num_layers)
+        # kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return

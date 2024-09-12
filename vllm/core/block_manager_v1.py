@@ -13,7 +13,7 @@ from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.logger import init_logger
 from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
 from vllm.utils import Device
-
+from collections import deque
 logger = init_logger(__name__)
 
 
@@ -30,7 +30,9 @@ class BlockAllocatorBase(ABC):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
-                 eviction_policy: EvictionPolicy = EvictionPolicy.LRU):
+                 num_layers: int,
+                 store_cache_layers: float,
+                 eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         pass
 
     @abstractmethod
@@ -72,6 +74,8 @@ class CachedBlockAllocator(BlockAllocatorBase):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
+                 num_layers: int,
+                 total_free_block_row: int,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         self.device = device
         self.block_size = block_size
@@ -79,6 +83,9 @@ class CachedBlockAllocator(BlockAllocatorBase):
 
         self.current_num_blocks = 0
         self.cached_blocks: Dict[int, PhysicalTokenBlock] = {}
+
+        self.num_layers = num_layers
+        self.total_free_block_row = total_free_block_row
 
         self.evictor: Evictor = make_evictor(eviction_policy)
 
@@ -137,6 +144,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
                 self.evictor.num_blocks)
 
     def get_num_total_blocks(self) -> int:
+        print(f'CachedBlockAllocator->self.num_blocks is {self.num_blocks}')
         return self.num_blocks
 
     def contains_block(self, block_hash: int) -> bool:
@@ -164,28 +172,44 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         device: Device,
         block_size: int,
         num_blocks: int,
+        num_layers: int,
+        total_free_block_row: int,
     ) -> None:
         self.device = device
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.num_layers = num_layers
+        self.total_free_block_row = total_free_block_row
+        
+        self.v_logical_blocks = total_free_block_row * num_blocks
+        self.free_blocks = self.init_free_blocks(device, block_size, self.v_logical_blocks)
 
+
+    def init_free_blocks(self, device: Device, block_size: int, num_blocks: int):
         # Initialize the free blocks.
-        self.free_blocks: BlockTable = []
+        # free_blocks: BlockTable = []
+        free_blocks: BlockTable = deque()
         for i in range(num_blocks):
             block = PhysicalTokenBlock(device=device,
                                        block_number=i,
                                        block_size=block_size,
                                        block_hash=-1,
                                        num_hashed_tokens=0)
-            self.free_blocks.append(block)
+            free_blocks.append(block)
+        return free_blocks    
 
     def allocate(self,
                  block_hash: Optional[int] = None,
                  num_hashed_tokens: int = 0) -> PhysicalTokenBlock:
+        
         if not self.free_blocks:
             raise ValueError("Out of memory! No free blocks are available.")
-        block = self.free_blocks.pop()
-        block.ref_count = 1
+        
+        else:
+            block = self.free_blocks.popleft()
+            # block = self.free_blocks.pop()
+            block.ref_count = 1
+            # print(f'allocate a new block: block_number is {block.block_number}, block_token_ids is {block.block_hash}, num_hashed_tokens is {block.num_hashed_tokens}, len(free_blocks) is {len(self.free_blocks)}')
         return block
 
     def free(self, block: PhysicalTokenBlock) -> None:
@@ -194,12 +218,14 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         block.ref_count -= 1
         if block.ref_count == 0:
             self.free_blocks.append(block)
+            # print(f'free a block: block_number is {block.block_number}, block_token_ids is {block.block_hash}, num_hashed_tokens is {block.num_hashed_tokens}, len(free_blocks) is {len(self.free_blocks)}') 
 
     def get_num_free_blocks(self) -> int:
         return len(self.free_blocks)
 
     def get_num_total_blocks(self) -> int:
-        return self.num_blocks
+        # return self.num_blocks
+        return self.v_logical_blocks
 
     def contains_block(self, block_hash: int) -> bool:
         raise NotImplementedError(
@@ -221,10 +247,16 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         watermark: float = 0.01,
         sliding_window: Optional[int] = None,
         enable_caching: bool = False,
+        num_layers: int = 32,
+        store_cache_layers: float = 1.0,
     ) -> None:
         self.block_size = block_size
         self.num_total_gpu_blocks = num_gpu_blocks
         self.num_total_cpu_blocks = num_cpu_blocks
+        self.num_layers = num_layers
+        self.store_cache_layers = store_cache_layers
+
+        self.total_free_block_row = int(1/store_cache_layers) # how many free block rows are there
 
         if enable_caching and sliding_window is not None:
             raise NotImplementedError(
@@ -241,19 +273,20 @@ class BlockSpaceManagerV1(BlockSpaceManager):
 
         self.enable_caching = enable_caching
 
-        self.watermark_blocks = int(watermark * num_gpu_blocks)
+        self.watermark_blocks = int(watermark * num_gpu_blocks * self.total_free_block_row)
 
         if self.enable_caching:
             logger.info("Automatic prefix caching is enabled.")
             self.gpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks)
+                Device.GPU, block_size, num_gpu_blocks, num_layers, self.total_free_block_row)
             self.cpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks)
+                Device.CPU, block_size, num_cpu_blocks, num_layers, self.total_free_block_row)
         else:
             self.gpu_allocator = UncachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks)
+                Device.GPU, block_size, num_gpu_blocks, num_layers, self.total_free_block_row)
+            print(f'num_gpu_blocks is {self.gpu_allocator.get_num_total_blocks()}')
             self.cpu_allocator = UncachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks)
+                Device.CPU, block_size, num_cpu_blocks, num_layers, self.total_free_block_row)
         # Mapping: seq_id -> BlockTable.
         self.block_tables: Dict[int, BlockTable] = {}
 
@@ -269,13 +302,12 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
 
         # Use watermark to avoid frequent cache eviction.
-        if (self.num_total_gpu_blocks - num_required_blocks <
-                self.watermark_blocks):
+        if (self.num_total_gpu_blocks - num_required_blocks < self.watermark_blocks): 
             return AllocStatus.NEVER
-        if num_free_gpu_blocks - num_required_blocks >= self.watermark_blocks:
+        if (num_free_gpu_blocks - num_required_blocks) >= self.watermark_blocks:
             return AllocStatus.OK
         else:
-            return AllocStatus.LATER
+            return AllocStatus.LATER        
 
     def allocate(self, seq_group: SequenceGroup) -> None:
         # NOTE: Here we assume that all sequences in the group have the same
@@ -302,6 +334,8 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                 block.ref_count = seq_group.num_seqs()
             block_table.append(block)
 
+        # print(f'allocate a new block_table_list: len(block_table) is {len(block_table)}, block_number is {block_table[0].block_number}, len(block_table) is {len(block_table)}, block_token_ids is {block_table[0].block_hash}, num_hashed_tokens is {block_table[0].num_hashed_tokens}')
+
         # Assign the block table for each sequence.
         for seq in seq_group.get_seqs(status=SequenceStatus.WAITING):
             self.block_tables[seq.seq_id] = block_table.copy()
@@ -316,6 +350,7 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # for each sequence, we can append.
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
         num_seqs = seq_group.num_seqs(status=SequenceStatus.RUNNING)
+        # return num_seqs <= num_free_gpu_blocks and self.current_free_block_row >= 0
         return num_seqs <= num_free_gpu_blocks
 
     def _promote_last_block(
@@ -333,7 +368,8 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # and return the cached version
         if self.gpu_allocator.contains_block(new_hash):
             self.gpu_allocator.free(last_block)
-            return self.gpu_allocator.allocate(new_hash)
+            res = self.gpu_allocator.allocate(new_hash)
+            return res
         else:
             self.gpu_allocator.update_hash(new_hash, last_block)
             return last_block
@@ -508,6 +544,13 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # convert to list of tuples once here
         return list(block_number_mapping.items())
 
+    def get_seq_used_block_id(self, seq_group: SequenceGroup) -> List[int]:
+        total_block_ids:List[int] = []
+        for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
+            block_table = self.block_tables[seq.seq_id]
+            total_block_ids.extend([block.block_number for block in block_table])
+        return total_block_ids
+
     def can_swap_out(self, seq_group: SequenceGroup) -> bool:
         blocks = self._get_physical_blocks(seq_group)
         return len(blocks) <= self.cpu_allocator.get_num_free_blocks()
@@ -519,14 +562,8 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             new_block_table: BlockTable = []
             block_table = self.block_tables[seq.seq_id]
-            # print(f'block_table: {block_table}')
 
             for gpu_block in block_table:
-                # print(f'gpu_block: {gpu_block}')
-                # print(f'gpu_block.block_number: {gpu_block.block_number}')
-                # print(f'gpu_block.block_hash: {gpu_block.block_hash}')
-                # print(f'gpu_block.num_hashed_tokens: {gpu_block.num_hashed_tokens}')
-
 
                 if gpu_block in mapping:
                     cpu_block = mapping[gpu_block]
@@ -535,7 +572,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                     cpu_block = self.cpu_allocator.allocate(
                         gpu_block.block_hash, gpu_block.num_hashed_tokens)
                     mapping[gpu_block] = cpu_block
-                    # print(f'cpu_block: {cpu_block}')
+                    # print(f'swap_out->cpu_block: {self.cpu_allocator.get_num_total_blocks()-cpu_block.block_number}, gpu_block: {gpu_block.block_number}')
+                    # cpu_block.block_number = self.cpu_allocator.get_num_total_blocks()-cpu_block.block_number-1
+
                 new_block_table.append(cpu_block)
                 # Free the GPU block swapped out to CPU.
                 self.gpu_allocator.free(gpu_block)
@@ -547,7 +586,7 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         }
         # print('After swap_out:')
         # print(f'self.free_gpu_blocks are: {self.get_num_free_gpu_blocks()}')
-        # print(f'self.free_cpu_blocks are: {self.get_num_free_cpu_blocks()}')
+        print(f'swap_out->block_number_mapping: {list(block_number_mapping.items())}')
         # convert to list of tuples once here
         return list(block_number_mapping.items())
 
