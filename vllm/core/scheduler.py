@@ -676,6 +676,7 @@ class Scheduler:
         waiting_queue = deque([s for s in waiting_queue])
 
         leftover_waiting_sequences: Deque[SequenceGroup] = deque()
+
         while self._passed_delay(time.time()) and waiting_queue:
             seq_group = waiting_queue[0]
 
@@ -786,6 +787,7 @@ class Scheduler:
 
         remaining_waiting, prefills = (self.waiting,
                                        SchedulerPrefillOutputs.create_empty())
+
         remaining_running, running_scheduled = (
             self.running, SchedulerRunningOutputs.create_empty())
         remaining_swapped, swapped_in = (
@@ -796,7 +798,9 @@ class Scheduler:
             remaining_waiting, prefills = self._schedule_prefills(
                 self.waiting, budget, curr_loras, enable_chunking=False)
 
-        fcfs_policy = PolicyFactory.get_policy(policy_name="fcfs")
+        # fcfs_policy = PolicyFactory.get_policy(policy_name="fcfs")
+        scheduling_policy = PolicyFactory.get_policy(policy_name=self.scheduler_config.scheduling_policy)
+        self.waiting = scheduling_policy.sort_by_priority(time.time(), self.waiting, self.scheduler_config.wt_weight)
         # Don't schedule decodes if prefills are scheduled.
         # NOTE: If `_schedule_prefills` doesn't enable chunking, self.running
         # only contains decode requests, not chunked prefills.
@@ -805,7 +809,7 @@ class Scheduler:
                 self.running,
                 budget,
                 curr_loras,
-                fcfs_policy,
+                scheduling_policy,
                 enable_chunking=False)
 
             # If any sequence group is preempted, do not swap in any sequence
@@ -813,7 +817,7 @@ class Scheduler:
             if len(running_scheduled.preempted) + len(
                     running_scheduled.swapped_out) == 0:
                 remaining_swapped, swapped_in = self._schedule_swapped(
-                    self.swapped, budget, curr_loras, fcfs_policy)
+                    self.swapped, budget, curr_loras, scheduling_policy)
 
         assert (budget.num_batched_tokens <=
                 self.scheduler_config.max_num_batched_tokens)
@@ -885,12 +889,14 @@ class Scheduler:
             self.swapped, SchedulerSwappedInOutputs.create_empty())
 
         # Decoding should be always scheduled first by fcfs.
-        fcfs_policy = PolicyFactory.get_policy(policy_name="fcfs")
+        # fcfs_policy = PolicyFactory.get_policy(policy_name="fcfs")
+        scheduling_policy = PolicyFactory.get_policy(policy_name=self.scheduler_config.scheduling_policy)
+        self.waiting = scheduling_policy.sort_by_priority(time.time(), self.waiting, self.scheduler_config.wt_weight)
         remaining_running, running_scheduled = self._schedule_running(
             self.running,
             budget,
             curr_loras,
-            fcfs_policy,
+            scheduling_policy,
             enable_chunking=True)
 
         # Schedule swapped out requests.
@@ -898,7 +904,7 @@ class Scheduler:
         if len(running_scheduled.preempted) + len(
                 running_scheduled.swapped_out) == 0:
             remaining_swapped, swapped_in = self._schedule_swapped(
-                self.swapped, budget, curr_loras, fcfs_policy)
+                self.swapped, budget, curr_loras, scheduling_policy)
 
         # Schedule new prefills.
         remaining_waiting, prefills = self._schedule_prefills(
@@ -1209,6 +1215,7 @@ class Scheduler:
             self.last_prompt_latency = now - self.prev_time
         self.prev_time, self.prev_prompt = now, False
         # Delay scheduling prompts to let waiting queue fill up
+        print(f'delay_factor: {self.scheduler_config.delay_factor}, last_prompt_latency: {self.last_prompt_latency}')
         if self.scheduler_config.delay_factor > 0 and self.waiting:
             earliest_arrival_time = min(
                 [e.metrics.arrival_time for e in self.waiting])
@@ -1216,6 +1223,7 @@ class Scheduler:
                 (now - earliest_arrival_time) >
                 (self.scheduler_config.delay_factor * self.last_prompt_latency)
                 or not self.running)
+            print(f'scheduler_config.delay_factor: {self.scheduler_config.delay_factor}, earliest_arrival_time: {earliest_arrival_time}, now: {now}, passed_delay: {passed_delay}')
         else:
             passed_delay = True
         return passed_delay

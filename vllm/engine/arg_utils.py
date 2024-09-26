@@ -90,8 +90,12 @@ class EngineArgs:
     speculative_disable_by_batch_size: Optional[int] = None
     ngram_prompt_lookup_max: Optional[int] = None
     ngram_prompt_lookup_min: Optional[int] = None
+
+    # add new configuration here
     preemption_mode: Optional[str] = None
     store_cache_layers: float = 1.0
+    scheduling_policy: Optional[str] = None
+    wt_weight: float = 0.5
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -553,6 +557,19 @@ class EngineArgs:
             default=EngineArgs.store_cache_layers,
             help='The fraction of layers to store kv cache.')
 
+        parser.add_argument(
+            '--scheduling-policy',
+            type=str,
+            default=EngineArgs.scheduling_policy,
+            help='The scheduling policy to use for the model.'
+        ) 
+        
+        parser.add_argument(
+            '--wt-weight',
+            type=float,
+            default=EngineArgs.wt_weight,
+            help='The wt_weight value for waiting time weight.')
+
         return parser
 
     @classmethod
@@ -622,6 +639,8 @@ class EngineArgs:
             enable_chunked_prefill=self.enable_chunked_prefill,
             embedding_mode=model_config.embedding_mode,
             preemption_mode=self.preemption_mode,
+            scheduling_policy=self.scheduling_policy,
+            wt_weight=self.wt_weight,
         )
         lora_config = LoRAConfig(
             max_lora_rank=self.max_lora_rank,
