@@ -21,6 +21,11 @@ class AttentionBackend(ABC):
 
     @staticmethod
     @abstractmethod
+    def get_impl_cls_fused() -> Type["FusedAttentionImpl"]:
+        raise NotImplementedError
+
+    @staticmethod
+    @abstractmethod
     def make_metadata(*args, **kwargs) -> "AttentionMetadata":
         raise NotImplementedError
 
@@ -117,6 +122,38 @@ class AttentionImpl(ABC, Generic[T]):
     @abstractmethod
     def forward(
         self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: T,
+        kv_scale: float = 1.0,
+    ) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class FusedAttentionImpl(ABC, Generic[T]):
+
+    @abstractmethod
+    def __init__(
+        self,
+        num_heads: int,
+        head_size: int,
+        scale: float,
+        num_kv_heads: Optional[int] = None,
+        alibi_slopes: Optional[List[float]] = None,
+        sliding_window: Optional[int] = None,
+        kv_cache_dtype: str = "auto",
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def forward(
+        self,
+        last_key: torch.Tensor,
+        last_value: torch.Tensor,
+        last_kv_cache: torch.Tensor,
+        last_attn_metadata: T,
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,

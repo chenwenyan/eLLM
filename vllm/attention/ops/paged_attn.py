@@ -82,6 +82,80 @@ class PagedAttention:
             kv_scale,
         )
 
+    # fused version of write_to_paged_cache
+    @staticmethod
+    def fused_write_to_paged_cache(
+        last_key: torch.Tensor,
+        last_value: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        slot_mapping: torch.Tensor,
+        kv_cache_dtype: str,
+        kv_scale: float,
+    ) -> None:
+        ops.fused_reshape_and_cache(
+            last_key,
+            last_value,
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping.flatten(),
+            kv_cache_dtype,
+            kv_scale,
+    )  
+
+    @staticmethod
+    def fused_forward(
+        last_query: torch.Tensor,
+        last_key: torch.Tensor,
+        last_value: torch.Tensor,
+        prefill_meta: PagedAttentionMetadata,
+        query: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        block_tables: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        kv_cache_dtype: str,
+        num_kv_heads: int,
+        scale: float,
+        alibi_slopes: Optional[torch.Tensor],
+        kv_scale: float,
+    ) -> torch.Tensor:
+        last_output = torch.empty_like(last_query)
+        output = torch.empty_like(query)
+        print(f"last_query: {last_query.shape}, last_key: {last_key.shape}, last_value: {last_value.shape}, query: {query.shape}, key_cache: {key_cache.shape}, value_cache: {value_cache.shape}, last_output: {last_output.shape}, output: {output.shape}")
+
+        block_size = value_cache.shape[3]
+        num_seqs, num_heads, head_size = last_query.shape
+        max_num_partitions = ((max_seq_len + _PARTITION_SIZE - 1) //
+                              _PARTITION_SIZE)        
+        use_v1 = (max_seq_len <= 8192
+                  and (max_num_partitions == 1 or num_seqs * num_heads > 512))
+        if use_v1:
+            # Run PagedAttention V1.
+            ops.fused_paged_attention_v1(
+                last_output,
+                last_query,
+                output,
+                query,
+                key_cache,
+                value_cache,
+                num_kv_heads,
+                scale,
+                block_tables,
+                seq_lens,
+                block_size,
+                max_seq_len,
+                alibi_slopes,
+                kv_cache_dtype,
+                kv_scale,
+            )
+        return last_output, output      
+
     @staticmethod
     def forward_decode(
         query: torch.Tensor,

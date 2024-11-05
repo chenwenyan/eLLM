@@ -8,6 +8,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   pybind11::module ops = m.def_submodule("ops", "vLLM custom operators");
 
   // Attention ops
+  ops.def("fused_paged_attention_v1", &fused_paged_attention_v1,
+          "Compute the attention between an input query and the cached "
+          "keys/values using PagedAttention.");
   ops.def("paged_attention_v1", &paged_attention_v1,
           "Compute the attention between an input query and the cached "
           "keys/values using PagedAttention.");

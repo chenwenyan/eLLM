@@ -1,6 +1,6 @@
 from vllm.attention.backends.abstract import (AttentionBackend,
                                               AttentionMetadata)
-from vllm.attention.layer import Attention
+from vllm.attention.layer import Attention, FusedAttention
 from vllm.attention.selector import get_attn_backend
 
 __all__ = [
@@ -8,5 +8,6 @@ __all__ = [
     "AttentionBackend",
     "AttentionMetadata",
     "Attention",
+    "FusedAttention",
     "get_attn_backend",
 ]

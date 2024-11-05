@@ -1,12 +1,24 @@
 from typing import Optional, Tuple, Type
 
 import torch
+import inspect
+from vllm._C import ops as vllm_ops
 
-try:
-    from vllm._C import cache_ops as vllm_cache_ops
-    from vllm._C import ops as vllm_ops
-except ImportError:
-    pass
+# 获取 vllm_ops 中的所有成员
+members = inspect.getmembers(vllm_ops)
+
+# 过滤出函数
+functions = [member for member in members if inspect.isfunction(member[1])]
+
+# 输出函数名称
+for name, func in functions:
+    print(name)
+
+# try:
+from vllm._C import cache_ops as vllm_cache_ops
+from vllm._C import ops as vllm_ops
+# except ImportError:
+#     pass
 
 
 # activation ops
@@ -50,7 +62,28 @@ def paged_attention_v1(
                                 num_kv_heads, scale, block_tables, seq_lens,
                                 block_size, max_seq_len, alibi_slopes,
                                 kv_cache_dtype, kv_scale)
-    # print(f'out: {out.shape}')
+
+def fused_paged_attention_v1(
+    last_out: torch.Tensor,
+    last_query: torch.Tensor,
+    out: torch.Tensor,
+    query: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    num_kv_heads: int,
+    scale: float,
+    block_tables: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_size: int,
+    max_seq_len: int,
+    alibi_slopes: Optional[torch.Tensor],
+    kv_cache_dtype: str,
+    kv_scale: float,
+) -> None:
+    vllm_ops.fused_paged_attention_v1(last_out, last_query, out, query, key_cache, value_cache,
+                                num_kv_heads, scale, block_tables, seq_lens,
+                                block_size, max_seq_len, alibi_slopes,
+                                kv_cache_dtype, kv_scale)
 
 def paged_attention_v1_with_dynamic_kv(
     out: torch.Tensor,
@@ -337,6 +370,21 @@ def reshape_and_cache(
     vllm_cache_ops.reshape_and_cache(key, value, key_cache, value_cache,
                                      slot_mapping, kv_cache_dtype, kv_scale)
 
+
+# fused reshape_and_cache
+def fused_reshape_and_cache(
+    last_key: torch.Tensor,
+    last_value: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    kv_cache_dtype: str,
+    kv_scale: float,
+) -> None:
+    vllm_cache_ops.fused_reshape_and_cache(last_key, last_value, key, value, key_cache, value_cache,
+                                     slot_mapping, kv_cache_dtype, kv_scale)
 
 def reshape_and_cache_flash(
     key: torch.Tensor,

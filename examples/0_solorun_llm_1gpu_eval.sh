@@ -15,14 +15,17 @@ export VLLM_LOGGING_LEVEL=DEBUG
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=recompute # 1: swap 2: recomputation
-gpu_id=3
+gpu_id=2
 # gpu_memory_utilizations=(0.1)
 # gpu_memory_utilizations=(0.2)
-gpu_memory_utilizations=(0.4)
+# gpu_memory_utilizations=(0.4)
+gpu_memory_utilizations=(0.7)
 # gpu_memory_utilizations=(0.9)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
-store_cache_layerss=(0.0625 0.125 0.25 0.5 0.75 1.0)
-# store_cache_layerss=(0.75 1.0)
+store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
+# store_cache_layerss=(0.05 0.1 0.2 0.25 0.5)
+store_cache_layerss=(0.25)
+
 
 # models=(facebook/opt-30b meta-llama/Llama-2-7b-hf meta-llama/Llama-2-13b-hf)
 # models=(facebook/opt-2.7b)
@@ -70,7 +73,8 @@ for i in "${!models[@]}"; do
                         --enforce-eager \
                         --scheduling-policy ${scheduling_policy} \
                         --wt-weight ${wt_weight} \
-                        --preemption-mode ${preemption_mode} --disable-log-requests > logs/dllm/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
+                        --preemption-mode ${preemption_mode} \
+                        --disable-log-requests > logs/dllm_hfusion/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
                     # > server.log 2>&1 &
                     pid=$!    
                     wait_for_server 8081
@@ -82,7 +86,7 @@ for i in "${!models[@]}"; do
                         --dataset ${dataset_path} \
                         --request-rate ${request_rate} \
                         --num-prompts ${num_prompt} \
-                        --endpoint /v1/completions > logs/dllm/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
+                        --endpoint /v1/completions >> logs/dllm_hfusion/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
                     # > client.log     
                     kill -9 $pid 
                     sleep 1

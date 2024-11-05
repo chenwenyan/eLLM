@@ -8,6 +8,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   pybind11::module ops = m.def_submodule("ops", "vLLM custom operators");
 
   // Attention ops
+  ops.def("fused_paged_attention_v1", &fused_paged_attention_v1,
+          "Compute the attention between an input query and the cached "
+          "keys/values using PagedAttention.");
   ops.def("paged_attention_v1", &paged_attention_v1,
           "Compute the attention between an input query and the cached "
           "keys/values using PagedAttention.");
@@ -75,6 +78,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                 "Copy the cache blocks from src to dst");
   cache_ops.def("reshape_and_cache", &reshape_and_cache,
                 "Reshape the key and value tensors and cache them");
+  cache_ops.def("fused_reshape_and_cache", &fused_reshape_and_cache,
+                "Fused Reshape the key and value tensors and cache them");                       
   cache_ops.def("reshape_and_cache_flash", &reshape_and_cache_flash,
                 "Reshape the key and value tensors and cache them");
   cache_ops.def("convert_fp8", &convert_fp8,

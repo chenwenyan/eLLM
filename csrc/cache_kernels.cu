@@ -202,6 +202,98 @@ __global__ void reshape_and_cache_kernel(
   }
 }
 
+template <typename scalar_t, typename cache_t, Fp8KVCacheDataType kv_dt>
+__global__ void fused_reshape_and_cache_kernel(
+    const scalar_t* __restrict__ last_key,    // [num_tokens, num_heads, head_size]
+    const scalar_t* __restrict__ last_value,  // [num_tokens, num_heads, head_size]
+    const scalar_t* __restrict__ key,    // [num_tokens, num_heads, head_size]
+    const scalar_t* __restrict__ value,  // [num_tokens, num_heads, head_size]
+    cache_t* __restrict__ key_cache,     // [num_blocks, num_heads, head_size/x,
+                                         // block_size, x]
+    cache_t* __restrict__ value_cache,   // [num_blocks, num_heads, head_size,
+                                         // block_size]
+    const int64_t* __restrict__ slot_mapping,  // [num_tokens]
+    const int key_stride, const int value_stride, const int num_heads,
+    const int head_size, const int block_size, const int x,
+    const float kv_scale) {
+  const int64_t token_idx = blockIdx.x;
+  const int64_t slot_idx = slot_mapping[token_idx];
+  if (slot_idx < 0) {
+    // Padding token that should be ignored.
+    return;
+  }
+
+  const int64_t block_idx = slot_idx / block_size;
+  const int64_t block_offset = slot_idx % block_size;
+
+  const int n = num_heads * head_size;
+  // First kernel computation
+  for (int i = threadIdx.x; i < n/2; i += blockDim.x) {
+    const int64_t src_last_key_idx = token_idx * key_stride + i;
+    const int64_t src_last_value_idx = token_idx * value_stride + i;
+
+    const int head_idx = i / head_size;
+    const int head_offset = i % head_size;
+    const int x_idx = head_offset / x;
+    const int x_offset = head_offset % x;
+
+    const int64_t tgt_last_key_idx =
+        block_idx * num_heads * (head_size / x) * block_size * x +
+        head_idx * (head_size / x) * block_size * x + x_idx * block_size * x +
+        block_offset * x + x_offset;
+    const int64_t tgt_last_value_idx =
+        block_idx * num_heads * head_size * block_size +
+        head_idx * head_size * block_size + head_offset * block_size +
+        block_offset;    
+
+    scalar_t tgt_last_key = last_key[src_last_key_idx];
+    scalar_t tgt_last_value = last_value[src_last_value_idx];
+
+    if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
+      key_cache[tgt_last_key_idx] = tgt_last_key;
+      value_cache[tgt_last_value_idx] = tgt_last_value;
+    } else {
+      key_cache[tgt_last_key_idx] =
+          fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_last_key, kv_scale);
+      value_cache[tgt_last_value_idx] =
+          fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_last_value, kv_scale);
+    }
+  }
+
+  // Second kernel computation
+  for (int i = n/2+threadIdx.x; i < n; i += blockDim.x) {
+    const int64_t src_key_idx = token_idx * key_stride + i;
+    const int64_t src_value_idx = token_idx * value_stride + i;
+
+    const int head_idx = i / head_size;
+    const int head_offset = i % head_size;
+    const int x_idx = head_offset / x;
+    const int x_offset = head_offset % x;
+
+    const int64_t tgt_key_idx =
+        block_idx * num_heads * (head_size / x) * block_size * x +
+        head_idx * (head_size / x) * block_size * x + x_idx * block_size * x +
+        block_offset * x + x_offset;
+    const int64_t tgt_value_idx =
+        block_idx * num_heads * head_size * block_size +
+        head_idx * head_size * block_size + head_offset * block_size +
+        block_offset; 
+
+    scalar_t tgt_key = key[src_key_idx];
+    scalar_t tgt_value = value[src_value_idx];
+
+    if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
+      key_cache[tgt_key_idx] = tgt_key;  
+      value_cache[tgt_value_idx] = tgt_value;
+    } else {
+      key_cache[tgt_key_idx] =
+          fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key, kv_scale);
+      value_cache[tgt_value_idx] =
+          fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value, kv_scale);
+    }
+  }
+}
+
 template <typename scalar_t>
 __global__ void reshape_and_cache_flash_kernel(
     const scalar_t* __restrict__ key,    // [num_tokens, num_heads, head_size]
@@ -274,6 +366,47 @@ void reshape_and_cache(
 
   DISPATCH_BY_KV_CACHE_DTYPE(key.dtype(), kv_cache_dtype,
                              CALL_RESHAPE_AND_CACHE)
+}
+
+#define CALL_FUSED_RESHAPE_AND_CACHE(KV_T, CACHE_T, KV_DTYPE)         \
+  vllm::fused_reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>       \
+      <<<grid, block, 0, stream>>>(                                   \
+          reinterpret_cast<KV_T*>(last_key.data_ptr()),               \
+          reinterpret_cast<KV_T*>(last_value.data_ptr()),             \
+          reinterpret_cast<KV_T*>(key.data_ptr()),                    \
+          reinterpret_cast<KV_T*>(value.data_ptr()),                  \
+          reinterpret_cast<CACHE_T*>(key_cache.data_ptr()),           \
+          reinterpret_cast<CACHE_T*>(value_cache.data_ptr()),         \
+          slot_mapping.data_ptr<int64_t>(), key_stride, value_stride, \
+          num_heads, head_size, block_size, x, kv_scale);
+          
+void fused_reshape_and_cache(
+    torch::Tensor& last_key,    // [num_tokens, num_heads, head_size]
+    torch::Tensor& last_value,  // [num_tokens, num_heads, head_size]
+    torch::Tensor& key,    // [num_tokens, num_heads, head_size]
+    torch::Tensor& value,  // [num_tokens, num_heads, head_size]
+    torch::Tensor&
+        key_cache,  // [num_blocks, num_heads, head_size/x, block_size, x]
+    torch::Tensor&
+        value_cache,  // [num_blocks, num_heads, head_size, block_size]
+    torch::Tensor& slot_mapping,  // [num_tokens]
+    const std::string& kv_cache_dtype, const float kv_scale) {
+  int num_tokens = key.size(0);
+  int num_heads = key.size(1);
+  int head_size = key.size(2);
+  int block_size = key_cache.size(3);
+  int x = key_cache.size(4);
+
+  int key_stride = key.stride(0);
+  int value_stride = value.stride(0);
+
+  dim3 grid(num_tokens);
+  dim3 block(std::min(num_heads * head_size, 512));
+  const at::cuda::OptionalCUDAGuard device_guard(device_of(key));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+  DISPATCH_BY_KV_CACHE_DTYPE(key.dtype(), kv_cache_dtype,
+                             CALL_FUSED_RESHAPE_AND_CACHE)
 }
 
 void reshape_and_cache_flash(

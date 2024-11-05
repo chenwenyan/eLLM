@@ -291,7 +291,7 @@ class Scheduler:
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching,
-            num_layers=32,
+            num_layers=40,
             store_cache_layers=self.cache_config.store_cache_layers)
 
 
@@ -1215,7 +1215,7 @@ class Scheduler:
             self.last_prompt_latency = now - self.prev_time
         self.prev_time, self.prev_prompt = now, False
         # Delay scheduling prompts to let waiting queue fill up
-        print(f'delay_factor: {self.scheduler_config.delay_factor}, last_prompt_latency: {self.last_prompt_latency}')
+        # print(f'delay_factor: {self.scheduler_config.delay_factor}, last_prompt_latency: {self.last_prompt_latency}')
         if self.scheduler_config.delay_factor > 0 and self.waiting:
             earliest_arrival_time = min(
                 [e.metrics.arrival_time for e in self.waiting])
@@ -1223,7 +1223,7 @@ class Scheduler:
                 (now - earliest_arrival_time) >
                 (self.scheduler_config.delay_factor * self.last_prompt_latency)
                 or not self.running)
-            print(f'scheduler_config.delay_factor: {self.scheduler_config.delay_factor}, earliest_arrival_time: {earliest_arrival_time}, now: {now}, passed_delay: {passed_delay}')
+            # print(f'scheduler_config.delay_factor: {self.scheduler_config.delay_factor}, earliest_arrival_time: {earliest_arrival_time}, now: {now}, passed_delay: {passed_delay}')
         else:
             passed_delay = True
         return passed_delay

@@ -739,7 +739,7 @@ class LLMEngine:
         num_total_gpu = num_total_gpu * (1 / self.scheduler.block_manager.store_cache_layers) 
         gpu_cache_usage_sys = 0.
         num_free_gpu = self.scheduler.block_manager.get_num_free_gpu_blocks()
-        print("num_free_gpu: ", num_free_gpu, "num_total_gpu: ", num_total_gpu)
+        # print("num_free_gpu: ", num_free_gpu, "num_total_gpu: ", num_total_gpu)
         if num_total_gpu is not None and num_total_gpu > 0:
             gpu_cache_usage_sys = 1.0 - (num_free_gpu / num_total_gpu)  
 
@@ -749,7 +749,7 @@ class LLMEngine:
         if num_total_cpu is not None and num_total_cpu > 0:
             num_free_cpu = self.scheduler.block_manager.get_num_free_cpu_blocks(
             )
-            print("num_free_cpu: ", num_free_cpu, "num_total_cpu: ", num_total_cpu)
+            # print("num_free_cpu: ", num_free_cpu, "num_total_cpu: ", num_total_cpu)
             cpu_cache_usage_sys = 1.0 - (num_free_cpu / num_total_cpu)
 
         # Iteration stats

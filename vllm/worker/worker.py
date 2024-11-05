@@ -243,7 +243,7 @@ class Worker(WorkerBase):
         return used_layer_ids
 
     def reshape_kv_cache(self, used_layer_ids):
-        print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
+        # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []
         for layer_ids in used_layer_ids:
             reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
@@ -285,7 +285,7 @@ class Worker(WorkerBase):
         et = torch.cuda.Event(enable_timing=True)
         et.record()
         torch.cuda.synchronize()
-        print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
+        # print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
         # `blocks_to_swap_in` and `blocks_to_swap_out` are cpu tensors.
