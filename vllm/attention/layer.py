@@ -93,8 +93,8 @@ class Attention(nn.Module):
         s += f", scale={self.impl.scale}"  # type: ignore
         return s
     
-class FusedAttention(nn.Module):
-    """FusedAttention layer.
+class HFusedAttention(nn.Module):
+    """HFusedAttention layer.
 
     This class takes query, key, and value tensors as input. The input tensors
     can either contain prompt tokens or generation tokens.

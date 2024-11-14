@@ -127,7 +127,7 @@ class PagedAttention:
     ) -> torch.Tensor:
         last_output = torch.empty_like(last_query)
         output = torch.empty_like(query)
-        print(f"last_query: {last_query.shape}, last_key: {last_key.shape}, last_value: {last_value.shape}, query: {query.shape}, key_cache: {key_cache.shape}, value_cache: {value_cache.shape}, last_output: {last_output.shape}, output: {output.shape}")
+        # print(f"last_query: {last_query.shape}, last_key: {last_key.shape}, last_value: {last_value.shape}, query: {query.shape}, key_cache: {key_cache.shape}, value_cache: {value_cache.shape}, last_output: {last_output.shape}, output: {output.shape}")
 
         block_size = value_cache.shape[3]
         num_seqs, num_heads, head_size = last_query.shape

@@ -22,9 +22,9 @@ gpu_id=2
 gpu_memory_utilizations=(0.7)
 # gpu_memory_utilizations=(0.9)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
-store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
-# store_cache_layerss=(0.05 0.1 0.2 0.25 0.5)
-store_cache_layerss=(0.25)
+# store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
+# store_cache_layerss=(0.05 0.1 0.2 0.25 0.5) # 40层 for llama2-13B
+store_cache_layerss=(0.05)
 
 
 # models=(facebook/opt-30b meta-llama/Llama-2-7b-hf meta-llama/Llama-2-13b-hf)
@@ -32,8 +32,8 @@ store_cache_layerss=(0.25)
 # models=(meta-llama/Llama-2-7b-hf)
 models=(meta-llama/Llama-2-13b-hf)
 # request_rates=(50 100 150 200 250 300)
-request_rates=(300)
-num_prompts=(300)
+request_rates=(400)
+num_prompts=(400)
 max_num_seqs=512
 # max_num_seqs=1024
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
@@ -54,44 +54,46 @@ wait_for_server() {
     done
 }
 
-for i in "${!models[@]}"; do
-    model="${models[$i]}"
-    gpu_memory_utilization="${gpu_memory_utilizations[$i]}"
-    model_name=$(echo "$model" | tr '/' '_')
-    for request_rate in ${request_rates[@]}; do
-        for num_prompt in ${num_prompts[@]}; do
-            for store_cache_layers in ${store_cache_layerss[@]}; do
-                for wt_weight in ${wt_weights[@]}; do
-                    CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 12-13 python3 -m vllm.entrypoints.openai.api_server \
-                        --model ${model} \
-                        --port 8081 \
-                        --tensor-parallel-size 1 \
-                        --swap-space 0 \
-                        --gpu-memory-utilization ${gpu_memory_utilization} \
-                        --store-cache-layers ${store_cache_layers} \
-                        --max-num-seqs ${max_num_seqs} \
-                        --enforce-eager \
-                        --scheduling-policy ${scheduling_policy} \
-                        --wt-weight ${wt_weight} \
-                        --preemption-mode ${preemption_mode} \
-                        --disable-log-requests > logs/dllm_hfusion/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
-                    # > server.log 2>&1 &
-                    pid=$!    
-                    wait_for_server 8081
-                    sleep 1
+for i in {1..1}; do
+    for i in "${!models[@]}"; do
+        model="${models[$i]}"
+        gpu_memory_utilization="${gpu_memory_utilizations[$i]}"
+        model_name=$(echo "$model" | tr '/' '_')
+        for request_rate in ${request_rates[@]}; do
+            for num_prompt in ${num_prompts[@]}; do
+                for store_cache_layers in ${store_cache_layerss[@]}; do
+                    for wt_weight in ${wt_weights[@]}; do
+                        CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 12-13 python3 -m vllm.entrypoints.openai.api_server \
+                            --model ${model} \
+                            --port 8081 \
+                            --tensor-parallel-size 1 \
+                            --swap-space 0 \
+                            --gpu-memory-utilization ${gpu_memory_utilization} \
+                            --store-cache-layers ${store_cache_layers} \
+                            --max-num-seqs ${max_num_seqs} \
+                            --enforce-eager \
+                            --scheduling-policy ${scheduling_policy} \
+                            --wt-weight ${wt_weight} \
+                            --preemption-mode ${preemption_mode} \
+                            --disable-log-requests > logs/dllm_org_128/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
+                        # > server.log 2>&1 &
+                        pid=$!    
+                        wait_for_server 8081
+                        sleep 1
 
-                    python3 ../benchmarks/benchmark_serving.py \
-                        --model ${model} \
-                        --port 8081 \
-                        --dataset ${dataset_path} \
-                        --request-rate ${request_rate} \
-                        --num-prompts ${num_prompt} \
-                        --endpoint /v1/completions >> logs/dllm_hfusion/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
-                    # > client.log     
-                    kill -9 $pid 
-                    sleep 1
-                done
-            done      
+                        python3 ../benchmarks/benchmark_serving.py \
+                            --model ${model} \
+                            --port 8081 \
+                            --dataset ${dataset_path} \
+                            --request-rate ${request_rate} \
+                            --num-prompts ${num_prompt} \
+                            --endpoint /v1/completions  >> logs/dllm_org_128/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
+                        # > client.log     
+                        kill -9 $pid 
+                        sleep 1
+                    done
+                done      
+            done
         done
     done
-done
+done    
