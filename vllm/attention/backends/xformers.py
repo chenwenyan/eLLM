@@ -8,7 +8,7 @@ from xformers.ops.fmha.attn_bias import (AttentionBias,
                                          BlockDiagonalCausalMask,
                                          LowerTriangularMaskWithTensorBias)
 
-from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl, FusedAttentionImpl,
+from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl, HFusedAttentionImpl,
                                               AttentionMetadata)
 from vllm.attention.ops.paged_attn import (PagedAttention,
                                            PagedAttentionMetadata)
@@ -29,7 +29,7 @@ class XFormersBackend(AttentionBackend):
 
     @staticmethod
     def get_impl_cls_fused() -> Type["FusedXFormersImpl"]:
-        return FusedXFormersImpl
+        return HFusedXFormersImpl
 
     @staticmethod
     def make_metadata(*args, **kwargs) -> "XFormersMetadata":
@@ -470,7 +470,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             start += seq_len
         return output    
 
-class FusedXFormersImpl(FusedAttentionImpl[XFormersMetadata]):
+class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
     """
     If the input tensors contain prompt tokens, the layout is as follows:
     |<--------------- num_prefill_tokens ----------------->|	
@@ -550,7 +550,7 @@ class FusedXFormersImpl(FusedAttentionImpl[XFormersMetadata]):
         Returns:
             shape = [num_tokens, num_heads * head_size]
         """
-        print(f"last_query is {last_query.shape}, last_key is {last_key.shape}, last_value is {last_value.shape}, query is {query.shape}, key is {key.shape}, value is {value.shape}")
+        # print(f"last_query is {last_query.shape}, last_key is {last_key.shape}, last_value is {last_value.shape}, query is {query.shape}, key is {key.shape}, value is {value.shape}")
         last_query = last_query.view(-1, self.num_heads, self.head_size)
         last_key = last_key.view(-1, self.num_kv_heads, self.head_size)
         last_value = last_value.view(-1, self.num_kv_heads, self.head_size)
@@ -581,7 +581,7 @@ class FusedXFormersImpl(FusedAttentionImpl[XFormersMetadata]):
 
         num_prefill_tokens = last_attn_metadata.num_prefill_tokens
         num_decode_tokens = attn_metadata.num_decode_tokens
-        print(f'FusedXFormersImpl->num_prefill_tokens is {num_prefill_tokens}, num_decode_tokens is {num_decode_tokens}, key.shape[0] is {key.shape[0]}, value.shape[0] is {value.shape[0]}')
+        # print(f'FusedXFormersImpl->num_prefill_tokens is {num_prefill_tokens}, num_decode_tokens is {num_decode_tokens}, key.shape[0] is {key.shape[0]}, value.shape[0] is {value.shape[0]}')
         # assert key.shape[0] == num_prefill_tokens + num_decode_tokens
         # assert value.shape[0] == num_prefill_tokens + num_decode_tokens
 

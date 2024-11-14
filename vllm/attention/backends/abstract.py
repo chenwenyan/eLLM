@@ -21,7 +21,7 @@ class AttentionBackend(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_impl_cls_fused() -> Type["FusedAttentionImpl"]:
+    def get_impl_cls_fused() -> Type["HFusedAttentionImpl"]:
         raise NotImplementedError
 
     @staticmethod
@@ -132,7 +132,7 @@ class AttentionImpl(ABC, Generic[T]):
         raise NotImplementedError
 
 
-class FusedAttentionImpl(ABC, Generic[T]):
+class HFusedAttentionImpl(ABC, Generic[T]):
 
     @abstractmethod
     def __init__(

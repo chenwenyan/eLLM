@@ -43,6 +43,7 @@
  #define MIN(a, b) ((a) < (b) ? (a) : (b))
  #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
+ #define THREADS_NUM_PER_BLOCK 128
 
  __global__ void dotProductKernel(float* Q, float* K, float* QK, int batch_size, int seq_length, int d_model) {
   int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -109,8 +110,8 @@ void attention(float* Q, float* K, float* V, float* output, int batch_size, int 
   cudaMemcpy(d_K, K, size, cudaMemcpyHostToDevice);
   cudaMemcpy(d_V, V, size, cudaMemcpyHostToDevice);
 
-  dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 dimGrid((seq_length + BLOCK_SIZE - 1) / BLOCK_SIZE, (batch_size * seq_length + BLOCK_SIZE - 1) / BLOCK_SIZE);
+  dim3 dimBlock(THREADS_NUM_PER_BLOCK, THREADS_NUM_PER_BLOCK);
+  dim3 dimGrid((seq_length + THREADS_NUM_PER_BLOCK - 1) / THREADS_NUM_PER_BLOCK, (batch_size * seq_length + THREADS_NUM_PER_BLOCK - 1) / THREADS_NUM_PER_BLOCK);
 
   dotProductKernel<<<dimGrid, dimBlock>>>(d_Q, d_K, d_QK, batch_size, seq_length, d_model);
   softmaxKernel<<<dimGrid, dimBlock>>>(d_QK, batch_size, seq_length);
@@ -153,8 +154,8 @@ __global__ void layer_norm_kernel(float* input, float* output, float* gamma, flo
 }
 
 void layer_norm(float* input, float* output, float* gamma, float* beta, int n, int d, float epsilon) {
-  int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  layer_norm_kernel<<<num_blocks, BLOCK_SIZE>>>(input, output, gamma, beta, n, d, epsilon);
+  int num_blocks = (n + THREADS_NUM_PER_BLOCK - 1) / THREADS_NUM_PER_BLOCK;
+  layer_norm_kernel<<<num_blocks, THREADS_NUM_PER_BLOCK>>>(input, output, gamma, beta, n, d, epsilon);
 }
 
 __global__ void mlp_kernel(float* input, float* output, float* weights1, float* biases1, float* weights2, float* biases2, int n, int d_in, int d_hidden, int d_out) {
@@ -183,8 +184,8 @@ __global__ void mlp_kernel(float* input, float* output, float* weights1, float* 
 }
 
 void mlp(float* input, float* output, float* weights1, float* biases1, float* weights2, float* biases2, int n, int d_in, int d_hidden, int d_out) {
-  int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-  mlp_kernel<<<num_blocks, BLOCK_SIZE>>>(input, output, weights1, biases1, weights2, biases2, n, d_in, d_hidden, d_out);
+  int num_blocks = (n + THREADS_NUM_PER_BLOCK - 1) / THREADS_NUM_PER_BLOCK;
+  mlp_kernel<<<num_blocks, THREADS_NUM_PER_BLOCK>>>(input, output, weights1, biases1, weights2, biases2, n, d_in, d_hidden, d_out);
 }
 
  
@@ -581,7 +582,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
          from_float(*(out_ptr + row_idx), accs[i]);
        }
      }
-   }
+  }
  }
  
  // Grid: (num_heads, num_seqs, 1).
@@ -971,6 +972,8 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
      }
    }
  }
+
+
  
  // Grid: (num_heads, num_seqs, 1).
  template <typename scalar_t, typename cache_t, int HEAD_SIZE, int BLOCK_SIZE,
@@ -998,7 +1001,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
        /* exp_sums */ nullptr, /* max_logits */ nullptr, last_out, last_q, out, q, k_cache,
        v_cache, num_kv_heads, scale, block_tables, seq_lens,
        max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride,
-       kv_head_stride, kv_scale);
+       kv_head_stride, kv_scale);    
  }
 
 

@@ -32,6 +32,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   ops.def("fused_add_rms_norm", &fused_add_rms_norm,
           "In-place fused Add and RMS Normalization");
 
+  ops.def("hfused_add_rms_norm", &hfused_add_rms_norm,
+          "In-place hfused Add and RMS Normalization");
+
+  ops.def("hfused_mlp", &hfused_mlp,
+          "In-place hfused MLP");
+
   // Rotary embedding
   ops.def("rotary_embedding", &rotary_embedding,
           "Apply GPT-NeoX or GPT-J style rotary embedding to query and key");
