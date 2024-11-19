@@ -40,7 +40,7 @@ void hfused_add_rms_norm(torch::Tensor& last_input, torch::Tensor& input,
                         torch::Tensor& weight, float epsilon);
 
 
-void hfused_mlp(torch::Tensor& last_out, torch::Tensor& out, torch::Tensor& last_input, torch::Tensor& input, torch::Tensor& bias);
+void hfused_mlp(torch::Tensor& last_out, torch::Tensor& out, torch::Tensor& last_input, torch::Tensor& input, torch:: Tensor& weight, torch::Tensor& bias);
 
 void rotary_embedding(torch::Tensor& positions, torch::Tensor& query,
                       torch::Tensor& key, int head_size,

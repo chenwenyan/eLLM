@@ -107,29 +107,20 @@ class HFusedLlamaMLP(nn.Module):
                              "Only silu is supported for now.")
         self.act_fn = SiluAndMul()
 
-        self.bias = bias
-
     def forward(self, last_x, x):
         # fused kernel function
-        # last_gate_up, _ = self.gate_up_proj(last_x)
-        # last_x = self.act_fn(last_gate_up)
-        # last_x, _ = self.down_proj(last_x)
+        out = torch.empty_like(x, device=x.device)
+        last_out = torch.empty_like(last_x, device=x.device)
+        # Load weights and bias from the model
+        weight = torch.empty(x.shape[-1], x.shape[-1], dtype=torch.float16, device=x.device)
+        bias = torch.empty(x.shape[-1], dtype=torch.float16, device=x.device)
 
-        gate_up, _ = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        x, _ = self.down_proj(x)
-        
-        # out = torch.empty_like(x)
-        # last_out = torch.empty_like(last_x)
-        # bias = torch.empty(x.shape[-1], dtype=torch.float16)
-        # print("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
-        # ops.hfused_mlp(last_out, out, last_x, x, bias) 
-        # print("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
-        # torch.cuda.synchronize()
-        # return last_out, out
+        print("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
+        ops.hfused_mlp(last_out, out, last_x, x, weight, bias) 
+        print("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
+        torch.cuda.synchronize()
+        return last_out, out
     
-        return last_x, x
-
 class LlamaAttention(nn.Module):
 
     def __init__(
@@ -365,22 +356,11 @@ class LlamaDecoderLayer(nn.Module):
                 last_attn_metadata=last_attn_metadata,
             )
 
-            # print(f'last_hidden_states: {last_hidden_states.shape}, hidden_states: {hidden_states.shape}')
-
             last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
                 last_hidden_states, hidden_states, last_residual, residual)
             
             last_hidden_states, hidden_states = self.hfused_mlp(
                 last_hidden_states, hidden_states)
-            
-            # Fully Connected
-            # last_hidden_states, last_residual = self.post_attention_layernorm(
-            #     last_hidden_states, last_residual)
-            # last_hidden_states = self.mlp(last_hidden_states)
-
-            # hidden_states, residual = self.post_attention_layernorm(
-            #     hidden_states, residual)
-            # hidden_states = self.mlp(hidden_states)
 
             return last_hidden_states, last_residual, hidden_states, residual
 

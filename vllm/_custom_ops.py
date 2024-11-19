@@ -212,8 +212,9 @@ def hfused_add_rms_norm(last_input: torch.Tensor, input: torch.Tensor,
                        weight: torch.Tensor, epsilon: float) -> None:
     vllm_ops.hfused_add_rms_norm(last_input, input, last_residual, residual, weight, epsilon)
 
-def hfused_mlp(last_out: torch.Tensor, out: torch.Tensor, last_input: torch.Tensor, input: torch.Tensor, bias: torch.Tensor) -> None:
-    vllm_ops.hfused_mlp(last_out, out, last_input, input, bias)    
+def hfused_mlp(last_out: torch.Tensor, out: torch.Tensor, last_input: torch.Tensor, input: torch.Tensor, 
+               weight: torch.Tensor, bias: torch.Tensor) -> None:
+    vllm_ops.hfused_mlp(last_out, out, last_input, input, weight, bias)    
 
 # quantization ops
 # awq

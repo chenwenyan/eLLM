@@ -1,10 +1,10 @@
 #include "cpu_types.hpp"
-#include <torch/extension.h>
 
 namespace vllm{
 template <typename scalar_t>
 void hfused_mlp_impl(scalar_t* __restrict__ last_input,
                       const scalar_t* __restrict__ input,
+                      const scalar_t* __restrict__ weight,
                       const scalar_t* __restrict__ bias,
                       const int num_tokens, const int input_size,
                       const int hidden_size, const int output_size) {
@@ -49,8 +49,7 @@ void hfused_mlp_impl(scalar_t* __restrict__ last_input,
 }
 }  // namespace
 
-void hfused_mlp(torch::Tensor& last_out,torch::Tensor& out,  torch::Tensor& last_input, torch::Tensor& input,
-                torch::Tensor& bias) {
+void hfused_mlp(torch::Tensor& last_out,torch::Tensor& out,  torch::Tensor& last_input, torch::Tensor& input, torch::Tensor& weight, torch::Tensor& bias) {
   int input_size = input.size(-1);
   int hidden_size = input.size(-1);
   int output_size = input.size(-1);
@@ -59,7 +58,7 @@ void hfused_mlp(torch::Tensor& last_out,torch::Tensor& out,  torch::Tensor& last
   VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "hfused_mlp_impl", [&] {
     CPU_KERNEL_GUARD_IN(hfused_mlp_impl)
     hfused_mlp_impl(last_input.data_ptr<scalar_t>(), input.data_ptr<scalar_t>(),
-                    bias.data_ptr<scalar_t>(),
+                    weight.data_ptr<scalar_t>(), bias.data_ptr<scalar_t>(),
                      num_tokens, input_size, hidden_size, output_size);
     CPU_KERNEL_GUARD_OUT(hfused_mlp_impl)
   });

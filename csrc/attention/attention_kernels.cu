@@ -1165,7 +1165,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
 
 // TODO(woosuk): Tune NUM_THREADS.
   template <typename T, typename CACHE_T, int BLOCK_SIZE,
-  vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 128>
+  vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 32>
   void fused_paged_attention_v1_launcher(
     torch::Tensor& last_out, torch::Tensor& last_q,
     torch::Tensor& out, torch::Tensor& query, torch::Tensor& key_cache,

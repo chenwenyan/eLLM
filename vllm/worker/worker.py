@@ -1,6 +1,7 @@
 """A GPU worker class."""
 import gc
 import os
+import sys
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import torch
@@ -240,70 +241,95 @@ class Worker(WorkerBase):
             used_layer_ids.append(tmp) 
         return used_layer_ids
 
-    def reshape_kv_cache(self, used_layer_ids):
-        st = torch.cuda.Event(enable_timing=True)
-        st.record()
-        reshaped_cache = []
+    # def reshape_kv_cache(self, used_layer_ids):
+    #     st = torch.cuda.Event(enable_timing=True)
+    #     st.record()
+    #     reshaped_cache = []
 
-        if len(self.gpu_cache) == len(used_layer_ids):
-            return self.gpu_cache
+    #     if len(self.gpu_cache) == len(used_layer_ids):
+    #         return self.gpu_cache
         
-        # Optimize memory management by directly creating the reshaped cache
-        for layer_ids in used_layer_ids:
-            tmp_cache = self.gpu_cache[layer_ids[0]]
-            if len(layer_ids) > 1:
-                kvcache_shape = tmp_cache.shape
-                expanded_shape = (2, kvcache_shape[1] * len(layer_ids), kvcache_shape[2])
-                expanded_tensor = tmp_cache.repeat_interleave(len(layer_ids), dim=1)
-                reshaped_cache.append(expanded_tensor.contiguous().view(*expanded_shape))
-            else:
-                reshaped_cache.append(tmp_cache)
+    #     # Optimize memory management by directly creating the reshaped cache
+    #     for layer_ids in used_layer_ids:
+    #         tmp_cache = self.gpu_cache[layer_ids[0]]
+    #         if len(layer_ids) > 1:
+    #             kvcache_shape = tmp_cache.shape
+    #             expanded_shape = (2, kvcache_shape[1] * len(layer_ids), kvcache_shape[2])
+    #             expanded_tensor = tmp_cache.repeat_interleave(len(layer_ids), dim=1)
+    #             reshaped_cache.append(expanded_tensor.contiguous().view(*expanded_shape))
+    #         else:
+    #             reshaped_cache.append(tmp_cache)
         
-        # Update gpu_cache in place
-        self.gpu_cache = reshaped_cache
+    #     # Update gpu_cache in place
+    #     self.gpu_cache = reshaped_cache
         
-        # Cleanup deleted tensors outside the loop to minimize GC impact
-        gc.collect()
-        torch.cuda.empty_cache()
+    #     # Cleanup deleted tensors outside the loop to minimize GC impact
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
         
-        et = torch.cuda.Event(enable_timing=True)
-        et.record()
-        torch.cuda.synchronize()
-        print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
+    #     et = torch.cuda.Event(enable_timing=True)
+    #     et.record()
+    #     torch.cuda.synchronize()
+    #     print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
         
-        return reshaped_cache
-
+    #     return reshaped_cache
 
     # def reshape_kv_cache(self, used_layer_ids):
     #     st = torch.cuda.Event(enable_timing=True)
     #     st.record()
     #     reshaped_cache = []
-    #     del_gpu_cache= []
+    #     del_gpu_cache = []
     #     tmp_cache = []
+        
     #     # used_layer_ids中的最大值不能超过len(self.gpu_cache)
-    #     if len(self.gpu_cache)==len(used_layer_ids):
+    #     if len(self.gpu_cache) == len(used_layer_ids):
     #         return self.gpu_cache
+        
+    #     print(f"used_layer_ids: {used_layer_ids}")
+        
+    #     # 预先计算需要删除的张量
+    #     del_layer_ids = set()
     #     for layer_ids in used_layer_ids:
     #         tmp_cache.append(self.gpu_cache[layer_ids[0]])
-    #         for del_layer_id in layer_ids[1:]:
-    #             del_gpu_cache.append(self.gpu_cache[del_layer_id])
+    #         del_layer_ids.update(layer_ids[1:])
+        
+    #     # 将需要删除的张量添加到del_gpu_cache
+    #     del_gpu_cache = [self.gpu_cache[layer_id] for layer_id in del_layer_ids]
+        
+    #     # get GPU memory usage by torch
+    #     print(f"GPU memory usage before free: {torch.cuda.memory_allocated() / 1024 ** 2} MB")
+        
+    #     # 删除张量
     #     for tensor in del_gpu_cache:
-    #         #print(f"Reference count of tensor: {sys.getrefcount(tensor)}")
-    #         referrers = gc.get_referrers(tensor)
-    #         for referrer in referrers:
-    #             if isinstance(referrer, list):
-    #                 for item in referrer:
-    #                     if torch.equal(item, tensor):
-    #                         referrer.remove(item)
-    #                         break
-    #             elif isinstance(referrer, dict):
-    #                 for key, value in referrer.items():
-    #                     if torch.equal(value, tensor):
-    #                         del referrer[key]
-    #                         break
+    #         # 检查张量是否仍然被引用
+    #         if sys.getrefcount(tensor) > 3:  # 3是因为getrefcount本身会增加引用计数
+    #             print(f"Reference count of tensor: {sys.getrefcount(tensor)}")
+    #             referrers = gc.get_referrers(tensor)
+    #             for referrer in referrers:
+    #                 if isinstance(referrer, list):
+    #                     referrer[:] = [item for item in referrer if not torch.equal(item, tensor)]
+    #                 elif isinstance(referrer, dict):
+    #                     referrer = {key: value for key, value in referrer.items() if not torch.equal(value, tensor)}
+            
+    #         # 删除张量
     #         del tensor
+        
+    #     gc_st = torch.cuda.Event(enable_timing=True)
+    #     gc_st.record()
     #     gc.collect()
+    #     gc_et = torch.cuda.Event(enable_timing=True)
+    #     gc_et.record()
+    #     torch.cuda.synchronize()
+    #     print(f'GC time: {gc_st.elapsed_time(gc_et)} ms')
     #     torch.cuda.empty_cache()
+    #     empty_cache_et = torch.cuda.Event(enable_timing=True)
+    #     empty_cache_et.record()
+    #     torch.cuda.synchronize()
+    #     print(f'empty_cache time: {gc_et.elapsed_time(empty_cache_et)} ms')
+        
+    #     print(f"GPU memory usage after free: {torch.cuda.memory_allocated() / 1024 ** 2} MB")
+        
+    #     # 重塑缓存
     #     for layer_ids in used_layer_ids:
     #         tmp_cache_index = used_layer_ids.index(layer_ids)
     #         if len(layer_ids) > 1:
@@ -311,11 +337,10 @@ class Worker(WorkerBase):
     #             base_tensor = tmp_cache[tmp_cache_index]
     #             expanded_shape = (2, kvcache_shape[1] * len(layer_ids), kvcache_shape[2])
     #             expanded_tensor = base_tensor.repeat_interleave(len(layer_ids), dim=1)
-        
     #             reshaped_cache.append(expanded_tensor.contiguous().view(*expanded_shape))
-                
     #         else:
     #             reshaped_cache.append(tmp_cache[tmp_cache_index])
+        
     #     self.gpu_cache = reshaped_cache
     #     et = torch.cuda.Event(enable_timing=True)
     #     et.record()
@@ -323,25 +348,25 @@ class Worker(WorkerBase):
     #     print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
     #     return reshaped_cache
 
-    # def get_used_layer_ids(self, total_block_ids):
-    #     store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
-    #     used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
-    #                                       for block_ids in total_block_ids]
-    #     used_start_layers_ids = max(used_start_layers_ids)
-    #     used_layer_ids = []
-    #     for i in range(store_cache_layer_num):
-    #         tmp = []
-    #         for j in range(used_start_layers_ids+1):
-    #             tmp.append(i+j*store_cache_layer_num)
-    #         used_layer_ids.append(tmp) 
-    #     return used_layer_ids
+    def get_used_layer_ids(self, total_block_ids):
+        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
+        used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
+                                          for block_ids in total_block_ids]
+        used_start_layers_ids = max(used_start_layers_ids)
+        used_layer_ids = []
+        for i in range(store_cache_layer_num):
+            tmp = []
+            for j in range(used_start_layers_ids+1):
+                tmp.append(i+j*store_cache_layer_num)
+            used_layer_ids.append(tmp) 
+        return used_layer_ids
 
-    # def reshape_kv_cache(self, used_layer_ids):
-    #     # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
-    #     reshaped_cache = []
-    #     for layer_ids in used_layer_ids:
-    #         reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
-    #     return reshaped_cache
+    def reshape_kv_cache(self, used_layer_ids):
+        # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
+        reshaped_cache = []
+        for layer_ids in used_layer_ids:
+            reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
+        return reshaped_cache
 
     def split_gpu_cache(self, used_layer_ids, reshaped_caches):
         split_nums = len(used_layer_ids[0])

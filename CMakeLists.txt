@@ -178,7 +178,7 @@ if(VLLM_GPU_LANG STREQUAL "CUDA")
   SET(CUTLASS_ENABLE_HEADERS_ONLY=ON)
   FetchContent_Declare(
         cutlass 
-        GIT_REPOSITORY https://github.com/nvidia/cutlass.git
+        GIT_REPOSITORY https://ghp.ci/https://github.com/nvidia/cutlass.git
         # CUTLASS 3.5.0
         GIT_TAG 7d49e6c7e2f8896c47f586706e67e1fb215529dc
   )
