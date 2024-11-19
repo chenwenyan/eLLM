@@ -454,7 +454,7 @@ class LlamaModel(nn.Module):
             # 第一次prefilling时不需要并行，decoding阶段需要并行
             for i in range(len(self.layers)-1):
                 # print(f'layer: {i}')
-                if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-4:
+                if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-3:
                     hidden_states, residual = self.layers[i](
                         positions,
                         hidden_states,
@@ -480,7 +480,7 @@ class LlamaModel(nn.Module):
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
                     # print(f"hidden_states: {hidden_states.shape}, residual: {residual.shape}")
-                i+=2
+
             # The last layer is not fused
             hidden_states, residual = self.layers[-1](
                 positions,

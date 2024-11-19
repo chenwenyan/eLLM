@@ -385,25 +385,7 @@ class Worker(WorkerBase):
                 tmp.append(i+j*store_cache_layer_num)
             used_layer_ids.append(tmp) 
         return used_layer_ids
-    def get_used_layer_ids(self, total_block_ids):
-        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
-        used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
-                                          for block_ids in total_block_ids]
-        used_start_layers_ids = max(used_start_layers_ids)
-        used_layer_ids = []
-        for i in range(store_cache_layer_num):
-            tmp = []
-            for j in range(used_start_layers_ids+1):
-                tmp.append(i+j*store_cache_layer_num)
-            used_layer_ids.append(tmp) 
-        return used_layer_ids
 
-    def reshape_kv_cache(self, used_layer_ids):
-        # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
-        reshaped_cache = []
-        for layer_ids in used_layer_ids:
-            reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
-        return reshaped_cache
     def reshape_kv_cache(self, used_layer_ids):
         # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []
