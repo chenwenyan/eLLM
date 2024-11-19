@@ -245,7 +245,13 @@ class Worker(WorkerBase):
     #     st = torch.cuda.Event(enable_timing=True)
     #     st.record()
     #     reshaped_cache = []
+    # def reshape_kv_cache(self, used_layer_ids):
+    #     st = torch.cuda.Event(enable_timing=True)
+    #     st.record()
+    #     reshaped_cache = []
 
+    #     if len(self.gpu_cache) == len(used_layer_ids):
+    #         return self.gpu_cache
     #     if len(self.gpu_cache) == len(used_layer_ids):
     #         return self.gpu_cache
         
@@ -259,14 +265,33 @@ class Worker(WorkerBase):
     #             reshaped_cache.append(expanded_tensor.contiguous().view(*expanded_shape))
     #         else:
     #             reshaped_cache.append(tmp_cache)
+    #     # Optimize memory management by directly creating the reshaped cache
+    #     for layer_ids in used_layer_ids:
+    #         tmp_cache = self.gpu_cache[layer_ids[0]]
+    #         if len(layer_ids) > 1:
+    #             kvcache_shape = tmp_cache.shape
+    #             expanded_shape = (2, kvcache_shape[1] * len(layer_ids), kvcache_shape[2])
+    #             expanded_tensor = tmp_cache.repeat_interleave(len(layer_ids), dim=1)
+    #             reshaped_cache.append(expanded_tensor.contiguous().view(*expanded_shape))
+    #         else:
+    #             reshaped_cache.append(tmp_cache)
         
+    #     # Update gpu_cache in place
+    #     self.gpu_cache = reshaped_cache
     #     # Update gpu_cache in place
     #     self.gpu_cache = reshaped_cache
         
     #     # Cleanup deleted tensors outside the loop to minimize GC impact
     #     gc.collect()
     #     torch.cuda.empty_cache()
+    #     # Cleanup deleted tensors outside the loop to minimize GC impact
+    #     gc.collect()
+    #     torch.cuda.empty_cache()
         
+    #     et = torch.cuda.Event(enable_timing=True)
+    #     et.record()
+    #     torch.cuda.synchronize()
+    #     print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
     #     et = torch.cuda.Event(enable_timing=True)
     #     et.record()
     #     torch.cuda.synchronize()
@@ -360,7 +385,25 @@ class Worker(WorkerBase):
                 tmp.append(i+j*store_cache_layer_num)
             used_layer_ids.append(tmp) 
         return used_layer_ids
+    def get_used_layer_ids(self, total_block_ids):
+        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
+        used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
+                                          for block_ids in total_block_ids]
+        used_start_layers_ids = max(used_start_layers_ids)
+        used_layer_ids = []
+        for i in range(store_cache_layer_num):
+            tmp = []
+            for j in range(used_start_layers_ids+1):
+                tmp.append(i+j*store_cache_layer_num)
+            used_layer_ids.append(tmp) 
+        return used_layer_ids
 
+    def reshape_kv_cache(self, used_layer_ids):
+        # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
+        reshaped_cache = []
+        for layer_ids in used_layer_ids:
+            reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
+        return reshaped_cache
     def reshape_kv_cache(self, used_layer_ids):
         # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []

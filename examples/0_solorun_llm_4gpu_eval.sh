@@ -12,6 +12,7 @@ export TORCH_USE_CUDA_DSA=1
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=recompute # 1: swap 2: recomputation
+preemption_mode=recompute # 1: swap 2: recomputation
 gpu_id=0,1,2,3
 tensor_parallel_size=4
 # gpu_memory_utilizations=(0.9 0.2 0.4)

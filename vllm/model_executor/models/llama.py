@@ -27,12 +27,12 @@ import torch
 from torch import nn
 from transformers import LlamaConfig
 
-from vllm.attention import Attention, AttentionMetadata, HFusedAttention
+from vllm.attention import Attention, AttentionMetadata, HFusedAttention, HFusedAttention
 from vllm.config import CacheConfig, LoRAConfig
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.model_executor.layers.activation import SiluAndMul
-from vllm.model_executor.layers.layernorm import RMSNorm, HFusedRMSNorm
+from vllm.model_executor.layers.layernorm import RMSNorm, HFusedRMSNorm, HFusedRMSNorm
 from vllm.model_executor.layers.linear import (MergedColumnParallelLinear,
                                                QKVParallelLinear,
                                                RowParallelLinear)
@@ -48,6 +48,8 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import SamplerOutput
 from vllm.utils import is_hip, print_warning_once
+
+from vllm import _custom_ops as ops
 
 from vllm import _custom_ops as ops
 
@@ -195,12 +197,52 @@ class LlamaAttention(nn.Module):
                               sliding_window=sliding_window,
                               cache_config=cache_config,
                               quant_config=quant_config)  
+                              quant_config=quant_config)  
+        self.hfused_attn = HFusedAttention(self.num_heads,
+                              self.head_dim,
+                              self.scaling,
+                              num_kv_heads=self.num_kv_heads,
+                              sliding_window=sliding_window,
+                              cache_config=cache_config,
+                              quant_config=quant_config)  
     def forward(
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        fused: Optional[bool] = False,
+        last_positions: Optional[torch.Tensor] = None,
+        last_hidden_states: Optional[torch.Tensor] = None,
+        last_kv_cache: Optional[torch.Tensor] = None,
+        last_attn_metadata: Optional[AttentionMetadata] = None,
+    ):
+        if not fused:
+            qkv, _ = self.qkv_proj(hidden_states)
+            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            q, k = self.rotary_emb(positions, q, k)
+            attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+            output, _ = self.o_proj(attn_output)
+            return output
+        else:
+            last_qkv, _ = self.qkv_proj(last_hidden_states)
+            last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
+            print(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
+        
+            qkv, _ = self.qkv_proj(hidden_states)
+            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            q, k = self.rotary_emb(positions, q, k)
+            print(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
+
+            # attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+            # fused attention 
+            last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
+            # print(f'last_attn_output: {last_attn_output.shape}, attn_output: {attn_output.shape}')
+            last_output, _ = self.o_proj(last_attn_output)
+            output, _ = self.o_proj(attn_output)
+            
+            return last_output, output
         fused: Optional[bool] = False,
         last_positions: Optional[torch.Tensor] = None,
         last_hidden_states: Optional[torch.Tensor] = None,
@@ -272,6 +314,7 @@ class LlamaDecoderLayer(nn.Module):
             cache_config=cache_config,
         )
 
+
         self.mlp = LlamaMLP(
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -282,6 +325,16 @@ class LlamaDecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                eps=config.rms_norm_eps)
+
+        self.hfused_mlp = HFusedLlamaMLP(
+            hidden_size=self.hidden_size,
+            intermediate_size=config.intermediate_size,
+            hidden_act=config.hidden_act,
+            quant_config=quant_config,
+            bias=getattr(config, "mlp_bias", False),
+        )
+        self.hfused_post_attention_layernorm = HFusedRMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
 
         self.hfused_mlp = HFusedLlamaMLP(
@@ -308,7 +361,27 @@ class LlamaDecoderLayer(nn.Module):
         last_attn_metadata: Optional[AttentionMetadata] = None,
         last_residual: Optional[torch.Tensor] = None,
     ):
+        fused: Optional[bool] = False,
+        last_positions: Optional[torch.Tensor] = None,
+        last_hidden_states: Optional[torch.Tensor] = None,
+        last_kv_cache: Optional[torch.Tensor] = None,
+        last_attn_metadata: Optional[AttentionMetadata] = None,
+        last_residual: Optional[torch.Tensor] = None,
+    ):
         # Self Attention
+        if not fused:
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(
+                    hidden_states, residual)
+            hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+            )
         if not fused:
             if residual is None:
                 residual = hidden_states
@@ -396,8 +469,17 @@ class LlamaModel(nn.Module):
 
         print(f'config.num_hidden_layers: {config.num_hidden_layers}')
 
+
+        print(f'config.num_hidden_layers: {config.num_hidden_layers}')
+
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.cache_config = cache_config
+
+        # save last_hidden_states for token 0~9
+        self.last_hidden_states = None
+        self.last_residual = None
+        self.last_attn_metadata = None
+        self.last_positions = None
 
         # save last_hidden_states for token 0~9
         self.last_hidden_states = None
