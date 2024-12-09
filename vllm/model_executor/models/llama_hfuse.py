@@ -419,7 +419,7 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        print('kv_caches_length: ', len(kv_caches))
+        # print('kv_caches_length: ', len(kv_caches))
         # 判断kv caches是否为空
         if attn_metadata.prefill_metadata is not None:
             self.last_attn_metadata = attn_metadata

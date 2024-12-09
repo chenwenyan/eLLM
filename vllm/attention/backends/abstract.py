@@ -67,6 +67,8 @@ class AttentionMetadata:
     # Number of decode tokens. Note that it is equivalent to the number of
     # decode requests.
     num_decode_tokens: int
+
+    total_seq_len: int
     # (num_tokens,). The indices of the token slots that input tokens will be
     # stored into. E.g., if `slot_mapping` is [35, 2, 17] and the block size
     # is 16, the three tokens are stored in the 3rd slot in block 2, 2nd slot

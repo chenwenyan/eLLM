@@ -14,6 +14,8 @@ from vllm.lora.request import LoRARequest
 from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
                            SequenceGroupMetadata, SequenceStatus)
 
+import torch
+
 logger = init_logger(__name__)
 
 # Test-only. If configured, decode is preempted with
@@ -755,7 +757,7 @@ class Scheduler:
         total_block_ids:List[int] = []
         for seq_group in seq_groups:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
-            print(f"seq_group: {seq_group.seq_group.request_id}, _running_block_ids: {_running_block_ids}")
+            # print(f"seq_group: {seq_group.seq_group.request_id}, _running_block_ids: {_running_block_ids}")
             total_block_ids.extend(_running_block_ids)
         return waiting_queue, SchedulerPrefillOutputs(
             seq_groups=seq_groups,
@@ -1184,17 +1186,26 @@ class Scheduler:
         blocks_to_swap_in: List[Tuple[int, int]],
         total_block_ids: List[int],
     ) -> None:
+        st_record = torch.cuda.Event(enable_timing=True)
+        en_record = torch.cuda.Event(enable_timing=True)
+        st_record.record()
         mapping = self.block_manager.swap_in(seq_group)
         blocks_to_swap_in.extend(mapping)
         total_block_ids.extend([block_id for _, block_id in mapping])
         for seq in seq_group.get_seqs(status=SequenceStatus.SWAPPED):
             seq.status = SequenceStatus.RUNNING
+        en_record.record()
+        torch.cuda.synchronize()
+        print(f"swap_in time: {st_record.elapsed_time(en_record)} ms")  
 
     def _swap_out(
         self,
         seq_group: SequenceGroup,
         blocks_to_swap_out: List[Tuple[int, int]],
     ) -> None:
+        st_record = torch.cuda.Event(enable_timing=True)
+        en_record = torch.cuda.Event(enable_timing=True)
+        st_record.record()
         if not self.block_manager.can_swap_out(seq_group):
             # FIXME(woosuk): Abort the sequence group instead of aborting the
             # entire engine.
@@ -1209,6 +1220,9 @@ class Scheduler:
         print(f"After mapping, blocks_to_swap_out: {blocks_to_swap_out}")
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             seq.status = SequenceStatus.SWAPPED
+        en_record.record()
+        torch.cuda.synchronize()
+        print(f"swap_out time: {st_record.elapsed_time(en_record)} ms")    
 
     def _passed_delay(self, now: float) -> bool:
         if self.prev_prompt:
