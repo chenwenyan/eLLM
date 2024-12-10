@@ -795,8 +795,8 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        kv_caches = [None] * int(num_layers)
-        # kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
+        # kv_caches = [None] * int(num_layers)
+        kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return

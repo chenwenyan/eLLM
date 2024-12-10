@@ -24,7 +24,7 @@ gpu_memory_utilizations=(0.6)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 # store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
 # store_cache_layerss=(0.05 0.1 0.2 0.25 0.5) # 40层 for llama2-13B
-store_cache_layerss=(0.1)
+store_cache_layerss=(0.05)
 
 
 # models=(facebook/opt-30b meta-llama/Llama-2-7b-hf meta-llama/Llama-2-13b-hf)
@@ -32,9 +32,10 @@ store_cache_layerss=(0.1)
 # models=(meta-llama/Llama-2-7b-hf)
 models=(meta-llama/Llama-2-13b-hf)
 # request_rates=(50 100 150 200 250 300)
-request_rates=(20)
-num_prompts=(20)
+request_rates=(50)
+num_prompts=(50)
 max_num_seqs=512
+max_num_batched_tokens=1024
 # max_num_seqs=1024
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 scheduling_policy=fcfs
@@ -55,9 +56,19 @@ wait_for_server() {
 }
 
 threads=64
-path_dir=logs/dllm_org_128_multi_hfusion_${threads}
-# path_dir=logs/dllm_org_128
-mkdir -p $path_dir
+DIR=logs/dllm_org_128_multi_hfusion_${threads}_chunked_prefill
+if [ ! -d "$DIR" ]; then
+  echo "Directory $DIR does not exist. Creating..."
+  mkdir -p "$DIR"
+  if [ $? -eq 0 ]; then
+    echo "Directory created successfully."
+  else
+    echo "Failed to create directory."
+  fi
+else
+  echo "Directory $DIR already exists."
+fi
+
 for i in {1..1}; do
     for i in "${!models[@]}"; do
         model="${models[$i]}"
@@ -67,7 +78,7 @@ for i in {1..1}; do
             for num_prompt in ${num_prompts[@]}; do
                 for store_cache_layers in ${store_cache_layerss[@]}; do
                     for wt_weight in ${wt_weights[@]}; do
-                        CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 2-3 python3 -m vllm.entrypoints.openai.api_server \
+                        CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 4-5 python3 -m vllm.entrypoints.openai.api_server \
                             --model ${model} \
                             --port 8081 \
                             --tensor-parallel-size 1 \
@@ -75,12 +86,12 @@ for i in {1..1}; do
                             --gpu-memory-utilization ${gpu_memory_utilization} \
                             --store-cache-layers ${store_cache_layers} \
                             --max-num-seqs ${max_num_seqs} \
-                            --enforce-eager \
+                            --max-num-batched-tokens ${max_num_batched_tokens} \
+                            --enable-chunked-prefill \
                             --scheduling-policy ${scheduling_policy} \
                             --wt-weight ${wt_weight} \
                             --preemption-mode ${preemption_mode} \
-                            --disable-log-requests > server.log 2>&1 &
-                            # > ${path_dir}/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
+                            --disable-log-requests > ${DIR}/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
                         # > server.log 2>&1 &
                         pid=$!    
                         wait_for_server 8081
@@ -92,8 +103,7 @@ for i in {1..1}; do
                             --dataset ${dataset_path} \
                             --request-rate ${request_rate} \
                             --num-prompts ${num_prompt} \
-                            --endpoint /v1/completions > client.log     
-                            # >> ${path_dir}/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
+                            --endpoint /v1/completions  >> ${DIR}/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
                         # > client.log     
                         kill -9 $pid 
                         sleep 1

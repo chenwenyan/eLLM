@@ -107,7 +107,9 @@ class Worker(WorkerBase):
 
             _check_if_gpu_supports_dtype(self.model_config.dtype)
             torch.cuda.empty_cache()
+            print(f'Before init_gpu_memory: {torch.cuda.memory_allocated()} MB')
             self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            print(f'After init_gpu_memory: {torch.cuda.memory_allocated()} MB')
         else:
             raise RuntimeError(
                 f"Not support device type: {self.device_config.device}")
@@ -158,6 +160,7 @@ class Worker(WorkerBase):
         # profiled peak memory.
         torch.cuda.synchronize()
         free_gpu_memory, total_gpu_memory = torch.cuda.mem_get_info()
+
         # NOTE(woosuk): Here we assume that the other processes using the same
         # GPU did not change their memory usage during the profiling.
         
@@ -373,24 +376,31 @@ class Worker(WorkerBase):
     #     print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
     #     return reshaped_cache
 
-    def get_used_layer_ids(self, total_block_ids):
-        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
-        used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
-                                          for block_ids in total_block_ids]
-        used_start_layers_ids = max(used_start_layers_ids)
-        used_layer_ids = []
-        for i in range(store_cache_layer_num):
-            tmp = []
-            for j in range(used_start_layers_ids+1):
-                tmp.append(i+j*store_cache_layer_num)
-            used_layer_ids.append(tmp) 
-        return used_layer_ids
+    # def get_used_layer_ids(self, total_block_ids):
+    #     store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
+    #     used_start_layers_ids = [block_ids//self.cache_engine.num_gpu_blocks
+    #                                       for block_ids in total_block_ids]
+    #     used_start_layers_ids = max(used_start_layers_ids)
+    #     used_layer_ids = []
+    #     for i in range(store_cache_layer_num):
+    #         tmp = []
+    #         for j in range(used_start_layers_ids+1):
+    #             tmp.append(i+j*store_cache_layer_num)
+    #         used_layer_ids.append(tmp) 
+    #     return used_layer_ids
 
     def reshape_kv_cache(self, used_layer_ids):
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem = torch.cuda.max_memory_allocated(self.device)
+        print(f'Before reshape_kv_cache: {mem}')
         # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []
         for layer_ids in used_layer_ids:
             reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
+
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem = torch.cuda.max_memory_allocated(self.device) 
+        print(f'After reshape_kv_cache: {mem}')   
         return reshaped_cache
 
     def split_gpu_cache(self, used_layer_ids, reshaped_caches):

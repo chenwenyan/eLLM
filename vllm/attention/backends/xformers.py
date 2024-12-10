@@ -263,7 +263,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         query = query.view(-1, self.num_heads, self.head_size)
         key = key.view(-1, self.num_kv_heads, self.head_size)
         value = value.view(-1, self.num_kv_heads, self.head_size)
-
+        print(f"input query is {query.shape}, key is {key.shape}, value is {value.shape}")
         if kv_cache is not None:
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
@@ -292,7 +292,9 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             print(f"e is {e}")
             raise e
         # Query for decode. KV is not needed because it is already cached.
-        decode_query = query[num_prefill_tokens:]
+        # decode_query = query[num_prefill_tokens:]
+        # decode_key = key[num_prefill_tokens:]
+        # decode_value = value[num_prefill_tokens:]
         # TODO: FIX assert 
         # assert decode_query.shape[0] == num_decode_tokens
 
@@ -310,8 +312,10 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 # normal attention.
                 # block tables are empty if the prompt does not have a cached
                 # prefix.
+                # print('prompt: normal attention, query is ', query.shape, 'key is ', key.shape, 'value is ', value.shape)
                 out = self._run_memory_efficient_xformers_forward(
                     query, key, value, prefill_meta)
+                # print(f'out.shape is {out.shape}, output.shape is {output.shape}, output[:num_prefill_tokens].shape is {output[:num_prefill_tokens].shape}')
                 assert out.shape == output[:num_prefill_tokens].shape
                 output[:num_prefill_tokens] = out
             else:
@@ -341,9 +345,8 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         if decode_meta := attn_metadata.decode_metadata:
             if kv_cache is None:
                 # normal attention.
-                # print(f'key is {key.shape}, value is {value.shape}, decode_query is {decode_query.shape}')
                 output[num_prefill_tokens:] = PagedAttention.forward_decode_with_dynamic_kv(
-                    decode_query,
+                    query,
                     key,
                     value,
                     decode_meta.block_tables,
@@ -363,7 +366,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
 
             else:    
                 output[num_prefill_tokens:] = PagedAttention.forward_decode(
-                    decode_query,
+                    query,
                     key_cache,
                     value_cache,
                     decode_meta.block_tables,

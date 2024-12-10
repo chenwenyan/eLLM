@@ -470,10 +470,23 @@ class CudaMemoryProfiler:
     def __init__(self, device=None):
         self.device = device
 
+    def get_memory_usage(self) -> float:
+        # Return the memory usage in bytes.
+        allocated = torch.cuda.memory_allocated(self.device)
+        reserved = torch.cuda.memory_reserved(self.device)
+        not_allocated = reserved - allocated
+        usage_rate = allocated / reserved if reserved > 0 else 0
+
+        print("Current memory usage (allocated): ", allocated)
+        print("Total memory reserved: ", reserved)
+        print("Memory not allocated: ", not_allocated)
+        print("Memory usage rate: ", usage_rate)
+
     def current_memory_usage(self) -> float:
         # Return the memory usage in bytes.
         torch.cuda.reset_peak_memory_stats(self.device)
         mem = torch.cuda.max_memory_allocated(self.device)
+        self.get_memory_usage()
         return mem
 
     def __enter__(self):
