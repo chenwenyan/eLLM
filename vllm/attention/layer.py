@@ -156,6 +156,7 @@ class HFusedAttention(nn.Module):
         impl_cls = attn_backend.get_impl_cls_fused()
         self.impl = impl_cls(num_heads, head_size, scale, num_kv_heads,
                              alibi_slopes, sliding_window, kv_cache_dtype)
+        
 
     def forward(
         self,

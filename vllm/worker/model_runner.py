@@ -582,6 +582,7 @@ class ModelRunner:
                 seq_lens=seq_lens,
                 seq_lens_tensor=seq_lens_tensor,
                 max_query_len=max_query_len,
+                total_seq_len=sum(seq_lens),
                 max_prefill_seq_len=max_prefill_seq_len,
                 max_decode_seq_len=max_decode_seq_len,
                 query_start_loc=query_start_loc,
@@ -619,6 +620,8 @@ class ModelRunner:
         seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
     ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
                Set[LoRARequest], LoRAMapping, torch.Tensor]:
+        # print(f'MODEL_RUNNER: prepare_input_tensors')
+        # print(f'MODEL_RUNNER: len(seq_group_metadata_list) is {len(seq_group_metadata_list)}, seq_group_metadata_list[0] is {seq_group_metadata_list[0].request_id}, seq_group_metadata_list[0].is_prompt is {seq_group_metadata_list[0].is_prompt}')
         if self.is_driver_worker:
             assert seq_group_metadata_list is not None
             # Prepare input tensors.
@@ -639,7 +642,7 @@ class ModelRunner:
             sampling_metadata = SamplingMetadata.prepare(
                 seq_group_metadata_list, seq_lens, query_lens, self.device,
                 self.pin_memory)
-
+            attn_metadata.total_seq_len = sum(seq_lens)
             metadata_dict = {
                 "input_tokens": input_tokens,
                 "input_positions": input_positions,
@@ -879,6 +882,7 @@ class ModelRunner:
                     num_decode_tokens=batch_size,
                     slot_mapping=slot_mapping[:batch_size],
                     seq_lens=None,
+                    total_seq_len=0,
                     seq_lens_tensor=seq_lens[:batch_size],
                     max_query_len=None,
                     max_prefill_seq_len=0,

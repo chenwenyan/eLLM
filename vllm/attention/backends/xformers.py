@@ -144,6 +144,7 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             max_query_len=self.max_query_len,
             max_prefill_seq_len=self.max_prefill_seq_len,
             max_decode_seq_len=0,
+            total_seq_len=0,
             query_start_loc=self.query_start_loc[:self.num_prefills + 1],
             seq_start_loc=None,
             context_lens_tensor=self.context_lens_tensor[:self.num_prefills],
@@ -175,6 +176,7 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             seq_lens_tensor=self.seq_lens_tensor[self.num_prefills:],
             max_query_len=None,
             max_prefill_seq_len=0,
+            total_seq_len=0,
             max_decode_seq_len=self.max_decode_seq_len,
             query_start_loc=None,
             seq_start_loc=None,
@@ -356,7 +358,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                     self.scale,
                     self.alibi_slopes,
                     )
-
+                    
                 # output = self._run_memory_efficient_xformers_forward_decode(
                 #     decode_query,
                 #     key,
@@ -364,7 +366,10 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 #     decode_meta,
                 # )
 
-            else:    
+            else:
+                decode_st = torch.cuda.Event(enable_timing=True)
+                decode_et = torch.cuda.Event(enable_timing=True)
+                decode_st.record()    
                 output[num_prefill_tokens:] = PagedAttention.forward_decode(
                     query,
                     key_cache,
@@ -378,6 +383,9 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                     self.alibi_slopes,
                     kv_scale,
                 )
+                decode_et.record()
+                torch.cuda.synchronize()
+                print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms")
         return output.view(-1, self.num_heads * self.head_size)
 
     def _run_memory_efficient_xformers_forward(
@@ -584,7 +592,6 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
 
         num_prefill_tokens = last_attn_metadata.num_prefill_tokens
         num_decode_tokens = attn_metadata.num_decode_tokens
-        # print(f'FusedXFormersImpl->num_prefill_tokens is {num_prefill_tokens}, num_decode_tokens is {num_decode_tokens}, key.shape[0] is {key.shape[0]}, value.shape[0] is {value.shape[0]}')
         # assert key.shape[0] == num_prefill_tokens + num_decode_tokens
         # assert value.shape[0] == num_prefill_tokens + num_decode_tokens
 
@@ -625,7 +632,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
             self.alibi_slopes,
             kv_scale,
         )
-        print(f'last_output.shape is {last_output.shape}, output.shape is {output.shape}')
+        # print(f'last_output.shape is {last_output.shape}, output.shape is {output.shape}')
 
         return last_output.view(-1, self.num_heads * self.head_size), output.view(-1, self.num_heads * self.head_size)    
 
