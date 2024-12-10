@@ -362,7 +362,10 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 #     decode_meta,
                 # )
 
-            else:    
+            else:
+                decode_st = torch.cuda.Event(enable_timing=True)
+                decode_et = torch.cuda.Event(enable_timing=True)
+                decode_st.record()    
                 output[num_prefill_tokens:] = PagedAttention.forward_decode(
                     decode_query,
                     key_cache,
@@ -376,6 +379,9 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                     self.alibi_slopes,
                     kv_scale,
                 )
+                decode_et.record()
+                torch.cuda.synchronize()
+                print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms")
         return output.view(-1, self.num_heads * self.head_size)
 
     def _run_memory_efficient_xformers_forward(

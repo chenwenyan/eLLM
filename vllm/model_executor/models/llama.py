@@ -390,11 +390,17 @@ class LlamaDecoderLayer(nn.Module):
                 stream1.synchronize()
                 stream2.synchronize()
             stream3.synchronize()
+
             if not skip_swap:
                 print(f'num_blocks: {self.num_blocks}, token_num: {token_num}')
                 print(f"cpu to gpu: {round(cpu_to_gpu_st.elapsed_time(cpu_to_gpu_et),7)} ms")
                 print(f"gpu to cpu: {round(gpu_to_cpu_st.elapsed_time(gpu_to_cpu_et),7)} ms")
                 print(f"computation time: {round(opt_st.elapsed_time(opt_et),7)} ms")
+
+                # print the json data
+                with open('data.json', 'w') as f:
+                    f.write('{"token_num":'+str(token_num)+',"num_blocks":'+str(self.num_blocks)+',"cpu_to_gpu":'+str(round(cpu_to_gpu_st.elapsed_time(cpu_to_gpu_et),7))+',"gpu_to_cpu":'+str(round(gpu_to_cpu_st.elapsed_time(gpu_to_cpu_et),7))+',"computation_time":'+str(round(opt_st.elapsed_time(opt_et),7))+'}')
+
                 self.output_tokens_length.append(token_num)
             torch.cuda.empty_cache()
             return hidden_states, residual

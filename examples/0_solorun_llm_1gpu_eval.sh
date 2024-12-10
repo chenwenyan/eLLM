@@ -15,7 +15,7 @@ export VLLM_LOGGING_LEVEL=DEBUG
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=3
+gpu_id=0
 # gpu_memory_utilizations=(0.1)
 # gpu_memory_utilizations=(0.2)
 gpu_memory_utilizations=(0.6)
@@ -34,7 +34,7 @@ models=(meta-llama/Llama-2-13b-hf)
 # request_rates=(50 100 150 200 250 300)
 request_rates=(4)
 num_prompts=(100)
-seeds=(1 2 3 4 5 6 7 8 9 10)
+seeds=(1)
 max_num_seqs=512
 # max_num_seqs=1024
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
