@@ -265,7 +265,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         query = query.view(-1, self.num_heads, self.head_size)
         key = key.view(-1, self.num_kv_heads, self.head_size)
         value = value.view(-1, self.num_kv_heads, self.head_size)
-        print(f"input query is {query.shape}, key is {key.shape}, value is {value.shape}")
+        # print(f"input query is {query.shape}, key is {key.shape}, value is {value.shape}")
         if kv_cache is not None:
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
@@ -385,7 +385,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 )
                 decode_et.record()
                 torch.cuda.synchronize()
-                print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}, decode_meta.seq_lens_tensor.sum() is {decode_meta.seq_lens_tensor.sum().to('cpu')}")
+                # print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}, decode_meta.seq_lens_tensor.sum() is {decode_meta.seq_lens_tensor.sum().to('cpu')}")
         return output.view(-1, self.num_heads * self.head_size)
 
     def _run_memory_efficient_xformers_forward(

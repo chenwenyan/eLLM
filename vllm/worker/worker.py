@@ -392,7 +392,7 @@ class Worker(WorkerBase):
     def reshape_kv_cache(self, used_layer_ids):
         torch.cuda.reset_peak_memory_stats(self.device)
         mem = torch.cuda.max_memory_allocated(self.device)
-        print(f'Before reshape_kv_cache: {mem}')
+        # print(f'Before reshape_kv_cache: {mem}')
         # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []
         for layer_ids in used_layer_ids:
@@ -400,7 +400,7 @@ class Worker(WorkerBase):
 
         torch.cuda.reset_peak_memory_stats(self.device)
         mem = torch.cuda.max_memory_allocated(self.device) 
-        print(f'After reshape_kv_cache: {mem}')   
+        # print(f'After reshape_kv_cache: {mem}')   
         return reshaped_cache
 
     def split_gpu_cache(self, used_layer_ids, reshaped_caches):
