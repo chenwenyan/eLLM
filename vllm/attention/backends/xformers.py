@@ -381,7 +381,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 )
                 decode_et.record()
                 torch.cuda.synchronize()
-                print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms")
+                print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}, decode_meta.seq_lens_tensor.sum() is {decode_meta.seq_lens_tensor.sum().to('cpu')}")
         return output.view(-1, self.num_heads * self.head_size)
 
     def _run_memory_efficient_xformers_forward(

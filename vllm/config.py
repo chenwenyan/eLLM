@@ -126,6 +126,7 @@ class ModelConfig:
         self.dtype = _get_and_verify_dtype(self.hf_text_config, dtype)
         self.max_model_len = _get_and_verify_max_len(self.hf_text_config,
                                                      max_model_len)
+        self.max_model_len = 4096
         self.served_model_name = get_served_model_name(model,
                                                        served_model_name)
         if not self.skip_tokenizer_init:
