@@ -118,7 +118,7 @@ class HFusedLlamaMLP(nn.Module):
         # print("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
         ops.hfused_mlp(last_out, out, last_x, x, weight, bias) 
         # print("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         return last_out, out
     
 class LlamaAttention(nn.Module):
@@ -361,6 +361,24 @@ class LlamaDecoderLayer(nn.Module):
             
             last_hidden_states, hidden_states = self.hfused_mlp(
                 last_hidden_states, hidden_states)
+            
+            last_hidden_states, hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                fused=True,
+                last_positions=last_positions,
+                last_hidden_states=last_hidden_states,
+                last_kv_cache=last_kv_cache,
+                last_attn_metadata=last_attn_metadata,
+            )
+
+            last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
+                last_hidden_states, hidden_states, last_residual, residual)
+            
+            last_hidden_states, hidden_states = self.hfused_mlp(
+                last_hidden_states, hidden_states)
 
             return last_hidden_states, last_residual, hidden_states, residual
 
@@ -419,7 +437,7 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        # print('kv_caches_length: ', len(kv_caches))
+        print('kv_caches_length: ', len(kv_caches))
         # 判断kv caches是否为空
         if attn_metadata.prefill_metadata is not None:
             self.last_attn_metadata = attn_metadata
@@ -452,8 +470,8 @@ class LlamaModel(nn.Module):
                     )
         else: 
             # 第一次prefilling时不需要并行，decoding阶段需要并行
-            for i in range(len(self.layers)-1):
-                # print(f'layer: {i}')
+            i = 0
+            while i < len(self.layers) - 2:
                 if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-4:
                     hidden_states, residual = self.layers[i](
                         positions,
@@ -463,6 +481,7 @@ class LlamaModel(nn.Module):
                         residual,
                     )  
                 else:
+                    print(f'fused layer: {i}')
                     # horizonal kernel fusion
                     last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
                         positions,
@@ -480,8 +499,20 @@ class LlamaModel(nn.Module):
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
                     # print(f"hidden_states: {hidden_states.shape}, residual: {residual.shape}")
-                i+=2
+                    print(f'after added, fused layer: {i}')
+                    i += 2 # skip two layers
+                    continue  # 跳过当前迭代，进入下一次迭代
+                i += 1
+
             # The last layer is not fused
+            hidden_states, residual = self.layers[-2](
+                positions,
+                hidden_states,
+                None,
+                attn_metadata,
+                residual,
+            )
+
             hidden_states, residual = self.layers[-1](
                 positions,
                 hidden_states,

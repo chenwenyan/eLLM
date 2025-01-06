@@ -99,7 +99,7 @@ def paged_attention_v1_with_dynamic_kv(
     
     from torch import nn    
     num_seqs, num_heads, head_size = query.shape
-    # print(f'num_seqs: {num_seqs}, num_heads: {num_heads}, head_size: {head_size}, num_kv_heads: {num_kv_heads}')
+    print(f'num_seqs: {num_seqs}, num_heads: {num_heads}, head_size: {head_size}, num_kv_heads: {num_kv_heads}')
     # num_seqs: 96, num_heads: 32, head_size: 80, num_kv_heads: 32
 
     # The first method
@@ -123,6 +123,10 @@ def paged_attention_v1_with_dynamic_kv(
     attn_weights = nn.functional.softmax(attn_scores, dim=-1)
     output = torch.matmul(attn_weights, value)
     out.copy_(output.view(num_seqs, -1, head_size))
+
+    # print(f'output: {output.shape}, out: {out.shape}')
+    # output = output.view(num_seqs, num_heads, head_size)
+    # out.copy_(output)
 
     # out.to('cpu')
     # print(f'out: {out.shape}')

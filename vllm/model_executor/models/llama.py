@@ -27,12 +27,12 @@ import torch
 from torch import nn
 from transformers import LlamaConfig
 
-from vllm.attention import Attention, AttentionMetadata, HFusedAttention
+from vllm.attention import Attention, AttentionMetadata
 from vllm.config import CacheConfig, LoRAConfig
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.model_executor.layers.activation import SiluAndMul
-from vllm.model_executor.layers.layernorm import RMSNorm, HFusedRMSNorm
+from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (MergedColumnParallelLinear,
                                                QKVParallelLinear,
                                                RowParallelLinear)
@@ -48,8 +48,6 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import SamplerOutput
 from vllm.utils import is_hip, print_warning_once
-
-from vllm import _custom_ops as ops
 
 
 class LlamaMLP(nn.Module):
@@ -193,14 +191,8 @@ class LlamaAttention(nn.Module):
                               num_kv_heads=self.num_kv_heads,
                               sliding_window=sliding_window,
                               cache_config=cache_config,
-                              quant_config=quant_config)  
-        self.hfused_attn = HFusedAttention(self.num_heads,
-                              self.head_dim,
-                              self.scaling,
-                              num_kv_heads=self.num_kv_heads,
-                              sliding_window=sliding_window,
-                              cache_config=cache_config,
-                              quant_config=quant_config)  
+                              quant_config=quant_config)
+
     def forward(
         self,
         positions: torch.Tensor,
@@ -284,7 +276,6 @@ class LlamaDecoderLayer(nn.Module):
             sliding_window=sliding_window,
             cache_config=cache_config,
         )
-
         self.mlp = LlamaMLP(
             hidden_size=self.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -297,16 +288,6 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
 
-        self.hfused_mlp = HFusedLlamaMLP(
-            hidden_size=self.hidden_size,
-            intermediate_size=config.intermediate_size,
-            hidden_act=config.hidden_act,
-            quant_config=quant_config,
-            bias=getattr(config, "mlp_bias", False),
-        )
-        self.hfused_post_attention_layernorm = HFusedRMSNorm(config.hidden_size,
-                                                eps=config.rms_norm_eps)
-
     def forward(
         self,
         positions: torch.Tensor,
@@ -314,13 +295,7 @@ class LlamaDecoderLayer(nn.Module):
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
-        fused: Optional[bool] = False,
-        last_positions: Optional[torch.Tensor] = None,
-        last_hidden_states: Optional[torch.Tensor] = None,
-        last_kv_cache: Optional[torch.Tensor] = None,
-        last_attn_metadata: Optional[AttentionMetadata] = None,
-        last_residual: Optional[torch.Tensor] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
         
         if not fused:
@@ -426,17 +401,8 @@ class LlamaModel(nn.Module):
             LlamaDecoderLayer(config, cache_config, quant_config)
             for _ in range(config.num_hidden_layers)
         ])
-
-        print(f'config.num_hidden_layers: {config.num_hidden_layers}')
-
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.cache_config = cache_config
-
-        # save last_hidden_states for token 0~9
-        self.last_hidden_states = None
-        self.last_residual = None
-        self.last_attn_metadata = None
-        self.last_positions = None
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -520,11 +486,11 @@ class LlamaModel(nn.Module):
             hidden_states, residual = self.layers[-1](
                 positions,
                 hidden_states,
-                None,
+                kv_cache,
                 attn_metadata,
                 residual,
-            )
-                    
+                )  
+  
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
 
