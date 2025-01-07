@@ -343,6 +343,8 @@ class CacheConfig:
         self.num_gpu_blocks = None
         self.num_cpu_blocks = None
 
+        # add new field to get num layers of any model
+        self.num_layers = None
         # add new field to store the cache layers
         self.store_cache_layers = store_cache_layers
 
@@ -1248,6 +1250,7 @@ class EngineConfig:
         """
         self.model_config.verify_with_parallel_config(self.parallel_config)
         self.cache_config.verify_with_parallel_config(self.parallel_config)
+        self.cache_config.num_layers = self.model_config.get_num_layers(self.parallel_config)
 
         if self.lora_config:
             self.lora_config.verify_with_model_config(self.model_config)
