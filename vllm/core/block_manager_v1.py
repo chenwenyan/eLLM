@@ -75,7 +75,6 @@ class CachedBlockAllocator(BlockAllocatorBase):
                  block_size: int,
                  num_blocks: int,
                  num_layers: int,
-                 total_free_block_row: int,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         self.device = device
         self.block_size = block_size
@@ -85,7 +84,6 @@ class CachedBlockAllocator(BlockAllocatorBase):
         self.cached_blocks: Dict[int, PhysicalTokenBlock] = {}
 
         self.num_layers = num_layers
-        self.total_free_block_row = total_free_block_row
 
         self.evictor: Evictor = make_evictor(eviction_policy)
 
@@ -173,15 +171,14 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         block_size: int,
         num_blocks: int,
         num_layers: int,
-        total_free_block_row: int,
     ) -> None:
         self.device = device
         self.block_size = block_size
         self.num_blocks = num_blocks
         self.num_layers = num_layers
-        self.total_free_block_row = total_free_block_row
         
-        self.v_logical_blocks = total_free_block_row * num_blocks
+        self.v_logical_blocks =  num_blocks * self.num_layers
+        print(f'v_logical_blocks is {self.v_logical_blocks}')
         self.free_blocks = self.init_free_blocks(device, block_size, self.v_logical_blocks)
 
 
@@ -251,12 +248,12 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         store_cache_layers: float = 1.0,
     ) -> None:
         self.block_size = block_size
-        self.num_total_gpu_blocks = num_gpu_blocks
-        self.num_total_cpu_blocks = num_cpu_blocks
+        # self.num_total_gpu_blocks = num_gpu_blocks
+        self.num_total_gpu_blocks = num_gpu_blocks * num_layers
+        # self.num_total_cpu_blocks = num_cpu_blocks
+        self.num_total_cpu_blocks = num_cpu_blocks * num_layers
         self.num_layers = num_layers
         self.store_cache_layers = store_cache_layers
-
-        self.total_free_block_row = int(1/store_cache_layers) # how many free block rows are there
 
         if enable_caching and sliding_window is not None:
             raise NotImplementedError(
@@ -273,20 +270,20 @@ class BlockSpaceManagerV1(BlockSpaceManager):
 
         self.enable_caching = enable_caching
 
-        self.watermark_blocks = int(watermark * num_gpu_blocks * self.total_free_block_row)
+        self.watermark_blocks = int(watermark * num_gpu_blocks)
 
         if self.enable_caching:
             logger.info("Automatic prefix caching is enabled.")
             self.gpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, num_layers, self.total_free_block_row)
+                Device.GPU, block_size, num_gpu_blocks, num_layers)
             self.cpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, num_layers, self.total_free_block_row)
+                Device.CPU, block_size, num_cpu_blocks, num_layers)
         else:
             self.gpu_allocator = UncachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, num_layers, self.total_free_block_row)
+                Device.GPU, block_size, num_gpu_blocks, num_layers)
             print(f'num_gpu_blocks is {self.gpu_allocator.get_num_total_blocks()}')
             self.cpu_allocator = UncachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, num_layers, self.total_free_block_row)
+                Device.CPU, block_size, num_cpu_blocks, num_layers)
         # Mapping: seq_id -> BlockTable.
         self.block_tables: Dict[int, BlockTable] = {}
 
@@ -294,12 +291,19 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # FIXME(woosuk): Here we assume that all sequences in the group share
         # the same prompt. This may not be true for preempted sequences.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
+        import numpy as np
+        cache_layer_ratio = np.random.uniform(0.1, 0.9)
+        cache_layer_ratio = round(cache_layer_ratio, 1)
+        seq_group.update_cache_layer_ratio(cache_layer_ratio)
         num_required_blocks = len(seq.logical_token_blocks)
+        print(f'seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}, seq.logical_token_blocks is {len(seq.logical_token_blocks)}, num_required_blocks is {num_required_blocks}, num_total_gpu_blocks is {self.num_total_gpu_blocks}')
+        num_required_blocks = int(seq_group.cache_layer_ratio * self.num_layers) * num_required_blocks 
 
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,
                                       self.block_sliding_window)
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
+        print(f'num_free_gpu_blocks is {num_free_gpu_blocks}')
 
         # Use watermark to avoid frequent cache eviction.
         if (self.num_total_gpu_blocks - num_required_blocks < self.watermark_blocks): 
@@ -313,6 +317,7 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # NOTE: Here we assume that all sequences in the group have the same
         # prompt.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
+        print(f'seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}')
 
         # Allocate new physical token blocks that will store the prompt tokens.
         num_prompt_blocks = len(seq.logical_token_blocks)

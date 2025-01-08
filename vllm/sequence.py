@@ -436,6 +436,7 @@ class SequenceGroup:
         multi_modal_data: Optional[MultiModalData] = None,
         embeddings: Optional[List[float]] = None,
         pooling_params: Optional[PoolingParams] = None,
+        cache_layer_ratio: Optional[float] = 1.0,
     ) -> None:
         self.request_id = request_id
         self.seqs_dict = {seq.seq_id: seq for seq in seqs}
@@ -451,6 +452,8 @@ class SequenceGroup:
         self.multi_modal_data = multi_modal_data
         self.embeddings = embeddings
         self.pooling_params = pooling_params
+        # add new parameter to control the cache layer ratio
+        self.cache_layer_ratio = cache_layer_ratio
 
     @property
     def prompt(self) -> str:
@@ -589,6 +592,9 @@ class SequenceGroup:
         return (f"SequenceGroup(request_id={self.request_id}, "
                 f"sampling_params={self.sampling_params}, "
                 f"num_seqs={len(self.seqs_dict)})")
+    
+    def update_cache_layer_ratio(self, ratio: float):
+        self.cache_layer_ratio = ratio
 
 
 class SequenceGroupMetadata:

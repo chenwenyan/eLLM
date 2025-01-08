@@ -382,8 +382,6 @@ class LlamaDecoderLayer(nn.Module):
 
             return last_hidden_states, last_residual, hidden_states, residual
 
-
-
 class LlamaModel(nn.Module):
 
     def __init__(

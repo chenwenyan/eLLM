@@ -497,7 +497,7 @@ class Scheduler:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
             total_block_ids.extend(_running_block_ids)
 
-        # print(f"total_block_ids: {total_block_ids}")    
+        print(f"total_block_ids: {total_block_ids}")    
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -745,6 +745,11 @@ class Scheduler:
             if curr_loras is not None and lora_int_id > 0:
                 curr_loras.add(lora_int_id)
             waiting_queue.popleft()
+            import numpy as np
+            cache_layer_ratio = np.random.uniform(0.1, 0.9)
+            cache_layer_ratio = round(cache_layer_ratio, 1)
+            seq_group.update_cache_layer_ratio(cache_layer_ratio)
+            print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layer_ratio: {seq_group.cache_layer_ratio}")
             self._allocate_and_set_running(seq_group)
             seq_groups.append(
                 ScheduledSequenceGroup(seq_group=seq_group,
