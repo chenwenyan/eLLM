@@ -422,12 +422,14 @@ class LlamaModel(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
+    from vllm.sequence import SequenceGroupMetadata
     def forward(
         self,
         input_ids: Optional[torch.Tensor],
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if inputs_embeds is not None:
@@ -467,6 +469,7 @@ class LlamaModel(nn.Module):
                         residual,
                     )
         else: 
+            layer_indexs = [seq_data['layer_index'] for seq_data in seq_data_list]
             # 第一次prefilling时不需要并行，decoding阶段需要并行
             i = 0
             while i < len(self.layers) - 2:
@@ -480,6 +483,13 @@ class LlamaModel(nn.Module):
                     )  
                 else:
                     print(f'fused layer: {i}')
+                    if i in layer_indexs:
+                        input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
+                        if inputs_embeds is None:
+                            hidden_states = self.get_input_embeddings(input_ids)
+                        positions = seq_data_list[layer_indexs.index(i)]['positions']
+                        attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
+
                     # horizonal kernel fusion
                     last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
                         positions,
@@ -586,9 +596,16 @@ class LlamaForCausalLM(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
+        st = torch.cuda.Event(enable_timing=True)
+        en = torch.cuda.Event(enable_timing=True)
+        st.record()
         hidden_states = self.model(input_ids, positions, kv_caches,
-                                   attn_metadata)
+                                   attn_metadata, seq_data_list)
+        en.record()
+        torch.cuda.synchronize()
+        print(f'forward time: {st.elapsed_time(en)} ms')
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,

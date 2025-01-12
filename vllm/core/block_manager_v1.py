@@ -30,7 +30,7 @@ class BlockAllocatorBase(ABC):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
-                 num_layers: int,
+                 flatten_num: int,
                  store_cache_layers: float,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         pass
@@ -74,7 +74,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
-                 num_layers: int,
+                 flatten_num: int,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         self.device = device
         self.block_size = block_size
@@ -83,7 +83,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
         self.current_num_blocks = 0
         self.cached_blocks: Dict[int, PhysicalTokenBlock] = {}
 
-        self.num_layers = num_layers
+        self.flatten_num = flatten_num
 
         self.evictor: Evictor = make_evictor(eviction_policy)
 
@@ -170,15 +170,15 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         device: Device,
         block_size: int,
         num_blocks: int,
-        num_layers: int,
+        flatten_num: int,
     ) -> None:
         self.device = device
         self.block_size = block_size
         self.num_blocks = num_blocks
-        self.num_layers = num_layers
+        self.flatten_num = flatten_num 
         
-        self.v_logical_blocks =  num_blocks * self.num_layers
-        print(f'v_logical_blocks is {self.v_logical_blocks}')
+        self.v_logical_blocks =  num_blocks * self.flatten_num
+        print(f'v_logical_blocks is {self.v_logical_blocks}, flatten_num is {flatten_num}')
         self.free_blocks = self.init_free_blocks(device, block_size, self.v_logical_blocks)
 
 
@@ -244,16 +244,17 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         watermark: float = 0.01,
         sliding_window: Optional[int] = None,
         enable_caching: bool = False,
-        num_layers: int = 32,
-        store_cache_layers: float = 1.0,
+        flatten_num: int = 10,  # for example: 40 layers, 展开是4layers，则需要X10 
+        num_layers: int = 40,
     ) -> None:
         self.block_size = block_size
         # self.num_total_gpu_blocks = num_gpu_blocks
-        self.num_total_gpu_blocks = num_gpu_blocks * num_layers
+        print(f'num_gpu_blocks is {num_gpu_blocks}, flatten_num is {flatten_num}')
+        self.num_total_gpu_blocks = num_gpu_blocks * flatten_num
         # self.num_total_cpu_blocks = num_cpu_blocks
-        self.num_total_cpu_blocks = num_cpu_blocks * num_layers
+        self.num_total_cpu_blocks = num_cpu_blocks * flatten_num
+        self.flatten_num = flatten_num
         self.num_layers = num_layers
-        self.store_cache_layers = store_cache_layers
 
         if enable_caching and sliding_window is not None:
             raise NotImplementedError(
@@ -275,15 +276,15 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         if self.enable_caching:
             logger.info("Automatic prefix caching is enabled.")
             self.gpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, num_layers)
+                Device.GPU, block_size, num_gpu_blocks, flatten_num)
             self.cpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, num_layers)
+                Device.CPU, block_size, num_cpu_blocks, flatten_num)
         else:
             self.gpu_allocator = UncachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, num_layers)
+                Device.GPU, block_size, num_gpu_blocks, flatten_num)
             print(f'num_gpu_blocks is {self.gpu_allocator.get_num_total_blocks()}')
             self.cpu_allocator = UncachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, num_layers)
+                Device.CPU, block_size, num_cpu_blocks, flatten_num)
         # Mapping: seq_id -> BlockTable.
         self.block_tables: Dict[int, BlockTable] = {}
 
@@ -291,13 +292,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # FIXME(woosuk): Here we assume that all sequences in the group share
         # the same prompt. This may not be true for preempted sequences.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
-        import numpy as np
-        cache_layer_ratio = np.random.uniform(0.1, 0.9)
-        cache_layer_ratio = round(cache_layer_ratio, 1)
-        seq_group.update_cache_layer_ratio(cache_layer_ratio)
         num_required_blocks = len(seq.logical_token_blocks)
-        print(f'seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}, seq.logical_token_blocks is {len(seq.logical_token_blocks)}, num_required_blocks is {num_required_blocks}, num_total_gpu_blocks is {self.num_total_gpu_blocks}')
-        num_required_blocks = int(seq_group.cache_layer_ratio * self.num_layers) * num_required_blocks 
+        print(f'num_required_blocks is {num_required_blocks}, seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}')
+        num_required_blocks = int(seq_group.cache_layer_ratio * self.flatten_num) * num_required_blocks 
 
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,

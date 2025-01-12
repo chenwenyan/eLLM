@@ -92,6 +92,7 @@ time.sleep(10)
 modified_times = []
 
 # 模拟一个batch内有多个不同num_layers后续的维度为0的情况
+st = time.time()
 for batch_index in range(batch_size):
     # 随机初始化一个batch内的num_layers
     zero_nums = np.random.randint(min_cache_layers-1, max_cache_layers-1, batch_size)
@@ -100,6 +101,8 @@ for batch_index in range(batch_size):
         K[batch_index, zero_num, :, :, :] = 0
         V[batch_index, zero_num, :, :, :] = 0
         print(f"batch_index: {batch_index}, zero_num: {zero_num}")
+et = time.time()
+print(f"Time cost: {(et-st)*1000} ms")        
     
 for i in range(loops):
     start_time = torch.cuda.Event(enable_timing=True)
@@ -130,4 +133,4 @@ data = {
     'speedup': [(mean_org_time - mean_modified_time)/mean_org_time]
 }
 df = pd.DataFrame(data)
-df.to_csv('test_policy.csv', mode='a', header=not os.path.exists('test_policy.csv'), index=False)
+# df.to_csv('test_policy.csv', mode='a', header=not os.path.exists('test_policy.csv'), index=False)

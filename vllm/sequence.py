@@ -633,6 +633,7 @@ class SequenceGroupMetadata:
         computed_block_nums: Optional[List[int]] = None,
         state: Optional[SequenceGroupState] = None,
         multi_modal_data: Optional[MultiModalData] = None,
+        cache_layer_ratio: Optional[float] = 1.0,
     ) -> None:
         self.request_id = request_id
         self.is_prompt = is_prompt
@@ -659,6 +660,8 @@ class SequenceGroupMetadata:
             else:
                 self._token_chunk_size = 1
 
+        self.cache_layer_ratio = cache_layer_ratio         
+
     @property
     def lora_int_id(self) -> int:
         return self.lora_request.lora_int_id if self.lora_request else 0
@@ -668,6 +671,9 @@ class SequenceGroupMetadata:
         """Return the number of tokens to be processed (chunk size)."""
         assert self._token_chunk_size is not None
         return self._token_chunk_size
+    
+    def update_cache_layer_ratio(self, ratio: float):
+        self.cache_layer_ratio = ratio
 
 
 class SequenceOutput:

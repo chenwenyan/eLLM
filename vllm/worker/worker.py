@@ -233,16 +233,24 @@ class Worker(WorkerBase):
         if blocks_to_copy.numel() > 0:
             self.cache_engine.copy(blocks_to_copy)
 
+    # def get_used_layer_ids(self, total_block_ids):
+    #     store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
+    #     used_start_layers_ids = self.cache_engine.num_layers//store_cache_layer_num-1
+    #     used_layer_ids = []
+    #     for i in range(store_cache_layer_num):
+    #         tmp = []
+    #         for j in range(used_start_layers_ids+1):
+    #             tmp.append(i+j*store_cache_layer_num)
+    #         used_layer_ids.append(tmp)
+    #     print(f'used_layer_ids: {used_layer_ids}')     
+    #     return used_layer_ids
+    
     def get_used_layer_ids(self, total_block_ids):
-        store_cache_layer_num = int(self.cache_config.store_cache_layers*self.cache_engine.num_layers) 
-        used_start_layers_ids = self.cache_engine.num_layers//store_cache_layer_num-1
-        used_layer_ids = []
-        for i in range(store_cache_layer_num):
-            tmp = []
-            for j in range(used_start_layers_ids+1):
-                tmp.append(i+j*store_cache_layer_num)
-            used_layer_ids.append(tmp) 
-        return used_layer_ids
+        store_cache_layer_num = int(self.cache_config.store_cache_layers * self.cache_engine.num_layers)
+        used_start_layers_ids = self.cache_engine.num_layers // store_cache_layer_num - 1
+        used_layer_ids = [[i + j * store_cache_layer_num for j in range(used_start_layers_ids + 1)] for i in range(store_cache_layer_num)]
+        print(f'used_layer_ids: {used_layer_ids}')     
+        return used_layer_ids    
 
     # def reshape_kv_cache(self, used_layer_ids):
     #     st = torch.cuda.Event(enable_timing=True)
@@ -390,16 +398,16 @@ class Worker(WorkerBase):
     #     return used_layer_ids
 
     def reshape_kv_cache(self, used_layer_ids):
-        torch.cuda.reset_peak_memory_stats(self.device)
-        mem = torch.cuda.max_memory_allocated(self.device)
+        # torch.cuda.reset_peak_memory_stats(self.device)
+        # mem = torch.cuda.max_memory_allocated(self.device)
         # print(f'Before reshape_kv_cache: {mem}')
         # print(f'len(self.gpu_cache): {len(self.gpu_cache)}')
         reshaped_cache = []
         for layer_ids in used_layer_ids:
             reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
 
-        torch.cuda.reset_peak_memory_stats(self.device)
-        mem = torch.cuda.max_memory_allocated(self.device) 
+        # torch.cuda.reset_peak_memory_stats(self.device)
+        # mem = torch.cuda.max_memory_allocated(self.device) 
         # print(f'After reshape_kv_cache: {mem}')   
         return reshaped_cache
 
@@ -439,7 +447,7 @@ class Worker(WorkerBase):
         et = torch.cuda.Event(enable_timing=True)
         et.record()
         torch.cuda.synchronize()
-        # print(f'gpu_cache reshape time: {st.elapsed_time(et)}')
+        print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
         # `blocks_to_swap_in` and `blocks_to_swap_out` are cpu tensors.

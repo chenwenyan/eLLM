@@ -275,6 +275,7 @@ class ModelRunner:
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
+            print(f'seq_group_metadata.cache_layer_ratio is {seq_group_metadata.cache_layer_ratio}')
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
@@ -287,6 +288,7 @@ class ModelRunner:
                         "now.")
 
                 seq_data = seq_group_metadata.seq_data[seq_id]
+                
                 if is_prompt:
                     context_len = seq_data.get_num_computed_tokens()
                 else:
@@ -370,6 +372,7 @@ class ModelRunner:
                 query_len = seq_len - context_len
                 query_lens.append(query_len)
                 input_tokens.extend(tokens)
+                # TODO: wenyan
                 input_positions.extend(list(range(context_len, seq_len)))
                 lora_id = seq_group_metadata.lora_int_id
 
@@ -706,6 +709,37 @@ class ModelRunner:
         else:
             model_executable = self.model
         
+        # 新建一个字典，用于存储每一层的输入数据
+        st = torch.cuda.Event(enable_timing=True)
+        et = torch.cuda.Event(enable_timing=True)
+        st.record()
+        _seq_group_metadata_dict = {}
+
+        for seq_group_metadata in seq_group_metadata_list:
+            cache_layer_ratio = seq_group_metadata.cache_layer_ratio
+            cache_layers = self.cache_config.num_layers * cache_layer_ratio
+            layer_index = cache_layers - 1
+            
+            if layer_index not in _seq_group_metadata_dict:
+                _seq_group_metadata_dict[layer_index] = [seq_group_metadata]
+            else:
+                _seq_group_metadata_dict[layer_index].append(seq_group_metadata)
+
+        seq_data_list = []
+        for layer_index, seq_group_metadata_list in _seq_group_metadata_dict.items():
+            (input_tokens, input_positions, attn_metadata, sampling_metadata,
+                lora_requests, lora_mapping, multi_modal_input
+            ) = self.prepare_input_tensors(seq_group_metadata_list)
+            seq_data_list.append({
+                'layer_index': layer_index,
+                'input_ids': input_tokens,
+                'positions': input_positions,
+                'attn_metadata': attn_metadata,
+            })
+
+        et.record()
+        torch.cuda.synchronize()
+        print(f'prepare_input_tensors time is {st.elapsed_time(et)} ms')   
             
         execute_model_kwargs = {
             "input_ids": input_tokens,
@@ -713,6 +747,7 @@ class ModelRunner:
             # TODO: concat kv_caches into 8 layers
             "kv_caches": kv_caches, #8layer [[0,8,16,24],[1,9,17,25],...]
             "attn_metadata": attn_metadata,
+            "seq_data_list": seq_data_list,
         }
         # print(f'MODEL_RUNNER: attn_metadata.seq_lens is {attn_metadata.seq_lens}')
         if self.vision_language_config:
