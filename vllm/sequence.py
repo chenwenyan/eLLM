@@ -633,7 +633,7 @@ class SequenceGroupMetadata:
         computed_block_nums: Optional[List[int]] = None,
         state: Optional[SequenceGroupState] = None,
         multi_modal_data: Optional[MultiModalData] = None,
-        cache_layers: Optional[int] = 4,
+        cache_layers: Optional[int] = 10,
     ) -> None:
         self.request_id = request_id
         self.is_prompt = is_prompt
@@ -660,7 +660,7 @@ class SequenceGroupMetadata:
             else:
                 self._token_chunk_size = 1
 
-        self.cache_layers = cache_layers         
+        self.cache_layers = cache_layers       
 
     @property
     def lora_int_id(self) -> int:

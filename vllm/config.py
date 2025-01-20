@@ -328,7 +328,7 @@ class CacheConfig:
         sliding_window: Optional[int] = None,
         enable_prefix_caching: bool = False,
         store_cache_layers: float = 1.0,
-        flatten_layers: int = 4,
+        flatten_layers: int = 10,
     ) -> None:
         self.block_size = block_size 
         self.gpu_memory_utilization = gpu_memory_utilization

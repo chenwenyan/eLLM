@@ -715,6 +715,7 @@ class ModelRunner:
         st.record()
         _seq_group_metadata_dict = {}
 
+        print(f'MODEL_RUNNER: len(seq_group_metadata_list) is {len(seq_group_metadata_list)}')
         for seq_group_metadata in seq_group_metadata_list:
             cache_layers = seq_group_metadata.cache_layers
             layer_index = cache_layers - 1
@@ -832,8 +833,8 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        # kv_caches = [None] * int(num_layers)
-        kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
+        kv_caches = [None] * int(num_layers)
+        # kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return

@@ -96,7 +96,7 @@ class EngineArgs:
     store_cache_layers: float = 1.0
     scheduling_policy: Optional[str] = None
     wt_weight: float = 0.5
-    flatten_layers: int = 4
+    flatten_layers: int = 10
 
     def __post_init__(self):
         if self.tokenizer is None:

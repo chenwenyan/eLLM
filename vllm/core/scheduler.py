@@ -992,7 +992,8 @@ class Scheduler:
         # Create input data structures.
         seq_group_metadata_list: List[SequenceGroupMetadata] = []
         # TODO: wenyan
-        cache_layers = random.choice([4, 8, 20])
+        # cache_layers = random.choice([4, 8, 20])
+        cache_layers = random.choice([10, 20, 40])
         for i, scheduled_seq_group in enumerate(
                 scheduler_outputs.scheduled_seq_groups):
             seq_group = scheduled_seq_group.seq_group
