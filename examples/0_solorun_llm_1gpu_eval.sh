@@ -81,6 +81,7 @@ for seed in ${seeds[@]}; do
                             --scheduling-policy ${scheduling_policy} \
                             --wt-weight ${wt_weight} \
                             --preemption-mode ${preemption_mode} \
+                            --flatten-layers 4 \
                             --disable-log-requests > server.log 2>&1 &
                             # > ${path_dir}/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
                         # > server.log 2>&1 &

@@ -14,6 +14,7 @@ from vllm.logger import init_logger
 from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
 from vllm.utils import Device
 from collections import deque
+import torch
 logger = init_logger(__name__)
 
 
@@ -30,8 +31,7 @@ class BlockAllocatorBase(ABC):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
-                 flatten_num: int,
-                 store_cache_layers: float,
+                 flatten_layers: int,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         pass
 
@@ -74,7 +74,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
                  device: Device,
                  block_size: int,
                  num_blocks: int,
-                 flatten_num: int,
+                 flatten_layers: int,
                  eviction_policy: EvictionPolicy = EvictionPolicy.LRU) -> None:
         self.device = device
         self.block_size = block_size
@@ -83,7 +83,7 @@ class CachedBlockAllocator(BlockAllocatorBase):
         self.current_num_blocks = 0
         self.cached_blocks: Dict[int, PhysicalTokenBlock] = {}
 
-        self.flatten_num = flatten_num
+        self.flatten_layers = flatten_layers
 
         self.evictor: Evictor = make_evictor(eviction_policy)
 
@@ -170,16 +170,12 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         device: Device,
         block_size: int,
         num_blocks: int,
-        flatten_num: int,
     ) -> None:
         self.device = device
         self.block_size = block_size
         self.num_blocks = num_blocks
-        self.flatten_num = flatten_num 
         
-        self.v_logical_blocks =  num_blocks * self.flatten_num
-        print(f'v_logical_blocks is {self.v_logical_blocks}, flatten_num is {flatten_num}')
-        self.free_blocks = self.init_free_blocks(device, block_size, self.v_logical_blocks)
+        self.free_blocks = self.init_free_blocks(device, block_size, num_blocks)
 
 
     def init_free_blocks(self, device: Device, block_size: int, num_blocks: int):
@@ -221,8 +217,7 @@ class UncachedBlockAllocator(BlockAllocatorBase):
         return len(self.free_blocks)
 
     def get_num_total_blocks(self) -> int:
-        # return self.num_blocks
-        return self.v_logical_blocks
+        return self.num_blocks
 
     def contains_block(self, block_hash: int) -> bool:
         raise NotImplementedError(
@@ -244,17 +239,12 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         watermark: float = 0.01,
         sliding_window: Optional[int] = None,
         enable_caching: bool = False,
-        flatten_num: int = 10,  # for example: 40 layers, 展开是4layers，则需要X10 
-        num_layers: int = 40,
+        flatten_layers: int = 0,
     ) -> None:
         self.block_size = block_size
-        # self.num_total_gpu_blocks = num_gpu_blocks
-        print(f'num_gpu_blocks is {num_gpu_blocks}, flatten_num is {flatten_num}')
-        self.num_total_gpu_blocks = num_gpu_blocks * flatten_num
-        # self.num_total_cpu_blocks = num_cpu_blocks
-        self.num_total_cpu_blocks = num_cpu_blocks * flatten_num
-        self.flatten_num = flatten_num
-        self.num_layers = num_layers
+        self.num_total_gpu_blocks = num_gpu_blocks
+        self.num_total_cpu_blocks = num_cpu_blocks
+        self.flatten_layers = flatten_layers
 
         if enable_caching and sliding_window is not None:
             raise NotImplementedError(
@@ -276,15 +266,15 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         if self.enable_caching:
             logger.info("Automatic prefix caching is enabled.")
             self.gpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, flatten_num)
+                Device.GPU, block_size, num_gpu_blocks)
             self.cpu_allocator: BlockAllocatorBase = CachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, flatten_num)
+                Device.CPU, block_size, num_cpu_blocks)
         else:
             self.gpu_allocator = UncachedBlockAllocator(
-                Device.GPU, block_size, num_gpu_blocks, flatten_num)
+                Device.GPU, block_size, num_gpu_blocks)
             print(f'num_gpu_blocks is {self.gpu_allocator.get_num_total_blocks()}')
             self.cpu_allocator = UncachedBlockAllocator(
-                Device.CPU, block_size, num_cpu_blocks, flatten_num)
+                Device.CPU, block_size, num_cpu_blocks)
         # Mapping: seq_id -> BlockTable.
         self.block_tables: Dict[int, BlockTable] = {}
 
@@ -293,8 +283,8 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # the same prompt. This may not be true for preempted sequences.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
         num_required_blocks = len(seq.logical_token_blocks)
-        print(f'num_required_blocks is {num_required_blocks}, seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}')
-        num_required_blocks = int(seq_group.cache_layer_ratio * self.flatten_num) * num_required_blocks 
+        print(f'num_required_blocks is {num_required_blocks}, seq_group.cache_layers is {seq_group.cache_layers}')
+        num_required_blocks = int(seq_group.cache_layers / self.flatten_layers) * num_required_blocks 
 
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,
@@ -314,13 +304,18 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # NOTE: Here we assume that all sequences in the group have the same
         # prompt.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
-        print(f'seq_group.cache_layer_ratio is {seq_group.cache_layer_ratio}')
+        print(f'seq_group.cache_layers is {seq_group.cache_layers}')
 
         # Allocate new physical token blocks that will store the prompt tokens.
         num_prompt_blocks = len(seq.logical_token_blocks)
+        print(f'num_prompt_blocks is {num_prompt_blocks}, self.block_sliding_window is {self.block_sliding_window}')
 
         block_table: BlockTable = []
         for logical_idx in range(num_prompt_blocks):
+            print(f'logical_idx is {logical_idx}')
+            st = torch.cuda.Event(enable_timing=True)
+            st.record()
+            et = torch.cuda.Event(enable_timing=True)
             if (self.block_sliding_window is not None
                     and logical_idx >= self.block_sliding_window):
                 block = block_table[logical_idx % self.block_sliding_window]
@@ -334,6 +329,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                 block = self.gpu_allocator.allocate()
                 # Set the reference counts of the token blocks.
                 block.ref_count = seq_group.num_seqs()
+            et.record()
+            torch.cuda.synchronize()
+            print(f'allocate block time is {st.elapsed_time(et)} ms')
             block_table.append(block)
 
         # print(f'allocate a new block_table_list: len(block_table) is {len(block_table)}, block_number is {block_table[0].block_number}, len(block_table) is {len(block_table)}, block_token_ids is {block_table[0].block_hash}, num_hashed_tokens is {block_table[0].num_hashed_tokens}')

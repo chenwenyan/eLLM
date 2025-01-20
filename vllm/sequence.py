@@ -436,7 +436,7 @@ class SequenceGroup:
         multi_modal_data: Optional[MultiModalData] = None,
         embeddings: Optional[List[float]] = None,
         pooling_params: Optional[PoolingParams] = None,
-        cache_layer_ratio: Optional[float] = 1.0,
+        cache_layers: Optional[int] = 4,
     ) -> None:
         self.request_id = request_id
         self.seqs_dict = {seq.seq_id: seq for seq in seqs}
@@ -452,8 +452,8 @@ class SequenceGroup:
         self.multi_modal_data = multi_modal_data
         self.embeddings = embeddings
         self.pooling_params = pooling_params
-        # add new parameter to control the cache layer ratio
-        self.cache_layer_ratio = cache_layer_ratio
+        # add new parameter to control the cache layers
+        self.cache_layers = cache_layers
 
     @property
     def prompt(self) -> str:
@@ -593,8 +593,8 @@ class SequenceGroup:
                 f"sampling_params={self.sampling_params}, "
                 f"num_seqs={len(self.seqs_dict)})")
     
-    def update_cache_layer_ratio(self, ratio: float):
-        self.cache_layer_ratio = ratio
+    def update_cache_layers(self, layers: int):
+        self.cache_layers = layers
 
 
 class SequenceGroupMetadata:
@@ -633,7 +633,7 @@ class SequenceGroupMetadata:
         computed_block_nums: Optional[List[int]] = None,
         state: Optional[SequenceGroupState] = None,
         multi_modal_data: Optional[MultiModalData] = None,
-        cache_layer_ratio: Optional[float] = 1.0,
+        cache_layers: Optional[int] = 4,
     ) -> None:
         self.request_id = request_id
         self.is_prompt = is_prompt
@@ -660,7 +660,7 @@ class SequenceGroupMetadata:
             else:
                 self._token_chunk_size = 1
 
-        self.cache_layer_ratio = cache_layer_ratio         
+        self.cache_layers = cache_layers         
 
     @property
     def lora_int_id(self) -> int:
@@ -672,8 +672,8 @@ class SequenceGroupMetadata:
         assert self._token_chunk_size is not None
         return self._token_chunk_size
     
-    def update_cache_layer_ratio(self, ratio: float):
-        self.cache_layer_ratio = ratio
+    def update_cache_layers(self, cache_layers: int):
+        self.cache_layers = cache_layers
 
 
 class SequenceOutput:

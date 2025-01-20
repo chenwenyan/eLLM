@@ -736,7 +736,7 @@ class LLMEngine:
 
         # KV Cache Usage in %
         num_total_gpu = self.cache_config.num_gpu_blocks
-        num_total_gpu = num_total_gpu * self.scheduler.block_manager.flatten_num
+        num_total_gpu = num_total_gpu * self.scheduler.block_manager.flatten_layers
         gpu_cache_usage_sys = 0.
         num_free_gpu = self.scheduler.block_manager.get_num_free_gpu_blocks()
         # print("num_free_gpu: ", num_free_gpu, "num_total_gpu: ", num_total_gpu)
@@ -744,7 +744,7 @@ class LLMEngine:
             gpu_cache_usage_sys = 1.0 - (num_free_gpu / num_total_gpu)  
 
         num_total_cpu = self.cache_config.num_cpu_blocks
-        num_total_cpu = num_total_cpu * self.scheduler.block_manager.flatten_num
+        num_total_cpu = num_total_cpu * self.scheduler.block_manager.flatten_layers
         cpu_cache_usage_sys = 0.
         if num_total_cpu is not None and num_total_cpu > 0:
             num_free_cpu = self.scheduler.block_manager.get_num_free_cpu_blocks(

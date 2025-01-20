@@ -482,7 +482,7 @@ class LlamaModel(nn.Module):
                         residual,
                     )  
                 else:
-                    print(f'fused layer: {i}')
+                    # print(f'fused layer: {i}')
                     if i in layer_indexs:
                         input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
                         if inputs_embeds is None:
@@ -507,7 +507,7 @@ class LlamaModel(nn.Module):
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
                     # print(f"hidden_states: {hidden_states.shape}, residual: {residual.shape}")
-                    print(f'after added, fused layer: {i}')
+                    # print(f'after added, fused layer: {i}')
                     i += 2 # skip two layers
                     continue  # 跳过当前迭代，进入下一次迭代
                 i += 1

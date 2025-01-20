@@ -275,7 +275,7 @@ class ModelRunner:
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
-            print(f'seq_group_metadata.cache_layer_ratio is {seq_group_metadata.cache_layer_ratio}')
+            print(f'seq_group_metadata.cache_layers is {seq_group_metadata.cache_layers}')
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
@@ -716,8 +716,7 @@ class ModelRunner:
         _seq_group_metadata_dict = {}
 
         for seq_group_metadata in seq_group_metadata_list:
-            cache_layer_ratio = seq_group_metadata.cache_layer_ratio
-            cache_layers = self.cache_config.num_layers * cache_layer_ratio
+            cache_layers = seq_group_metadata.cache_layers
             layer_index = cache_layers - 1
             
             if layer_index not in _seq_group_metadata_dict:

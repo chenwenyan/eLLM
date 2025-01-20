@@ -289,7 +289,6 @@ class Scheduler:
         # Create the block space manager.
         # set dynamic cache layer ratio by various request loads
         # set flatten layers by num_layers
-        flatten_num = 10
         print(f"self.cache_config.num_layers is {self.cache_config.num_layers}")
         self.block_manager = BlockSpaceManagerImpl(
             block_size=self.cache_config.block_size,
@@ -297,8 +296,7 @@ class Scheduler:
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching,
-            flatten_num=flatten_num,
-            num_layers=self.cache_config.num_layers)
+            flatten_layers=self.cache_config.flatten_layers)
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.
@@ -994,7 +992,7 @@ class Scheduler:
         # Create input data structures.
         seq_group_metadata_list: List[SequenceGroupMetadata] = []
         # TODO: wenyan
-        cache_layer_ratio = random.choice([0.1, 0.2, 0.5])
+        cache_layers = random.choice([4, 8, 20])
         for i, scheduled_seq_group in enumerate(
                 scheduler_outputs.scheduled_seq_groups):
             seq_group = scheduled_seq_group.seq_group
@@ -1032,7 +1030,7 @@ class Scheduler:
 
             # It assumes the scheduled_seq_groups is ordered by
             # prefill < decoding.
-            print(f'scheduler->seq_group.cache_layer_ratio is {cache_layer_ratio}')
+            print(f'scheduler->seq_group.cache_layers is {cache_layers}')
             is_prompt = seq_group.is_prefill()
             seq_group_metadata = SequenceGroupMetadata(
                 request_id=seq_group.request_id,
@@ -1052,11 +1050,11 @@ class Scheduler:
                 # `multi_modal_data` will be None.
                 multi_modal_data=seq_group.multi_modal_data
                 if scheduler_outputs.num_prefill_groups > 0 else None,
-                cache_layer_ratio=cache_layer_ratio,
+                cache_layers=cache_layers,
             )
-            seq_group.update_cache_layer_ratio(cache_layer_ratio)
-            seq_group_metadata.update_cache_layer_ratio(cache_layer_ratio)
-            print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layer_ratio: {seq_group.cache_layer_ratio}")
+            seq_group.update_cache_layers(cache_layers)
+            seq_group_metadata.update_cache_layers(cache_layers)
+            print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
 
         # Now that the batch has been created, we can assume all blocks in the

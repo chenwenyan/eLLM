@@ -328,6 +328,7 @@ class CacheConfig:
         sliding_window: Optional[int] = None,
         enable_prefix_caching: bool = False,
         store_cache_layers: float = 1.0,
+        flatten_layers: int = 4,
     ) -> None:
         self.block_size = block_size 
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -347,6 +348,9 @@ class CacheConfig:
         self.num_layers = None
         # add new field to store the cache layers
         self.store_cache_layers = store_cache_layers
+    
+        # flatten layers for kv cache
+        self.flatten_layers = flatten_layers
 
     def metrics_info(self):
         # convert cache_config to dict(key: str, value: str) for prometheus

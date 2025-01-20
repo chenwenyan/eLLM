@@ -37,7 +37,7 @@ class CacheEngine:
         self.num_gpu_blocks = cache_config.num_gpu_blocks
         self.num_cpu_blocks = cache_config.num_cpu_blocks
 
-        self.store_cache_layers = cache_config.store_cache_layers
+        self.flatten_layers = cache_config.flatten_layers
 
         if cache_config.cache_dtype == "auto":
             self.dtype = model_config.dtype
@@ -65,13 +65,17 @@ class CacheEngine:
         device: str,
     ) -> List[torch.Tensor]:
         """Allocates KV cache on the specified device."""
+        # kv_cache_shape = self.attn_backend.get_kv_cache_shape(
+            # num_blocks, self.block_size, self.num_kv_heads, self.head_size)
+        
         kv_cache_shape = self.attn_backend.get_kv_cache_shape(
-            num_blocks, self.block_size, self.num_kv_heads, self.head_size)
+            int(num_blocks/(self.num_layers/self.flatten_layers)), self.block_size, self.num_kv_heads, self.head_size)
+        
         print(f'kv_cache_shape: {kv_cache_shape}')
         pin_memory = is_pin_memory_available() if device == "cpu" else False
         kv_cache: List[torch.Tensor] = []
         for _ in range(self.num_layers):
-        # for _ in range(int(self.num_layers*self.store_cache_layers)):
+        # for _ in range(int(self.flatten_layers)):
             kv_cache.append(
                 torch.empty(kv_cache_shape,
                             dtype=self.dtype,
