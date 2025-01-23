@@ -148,6 +148,7 @@ class MultiprocessingGPUExecutorAsync(MultiprocessingGPUExecutor,
         return await self.driver_exec_model(execute_model_req)
 
     async def _start_worker_execution_loop(self):
+        print("Multiproc_gpu_executor->Starting worker execution loop")
         coros = [
             worker.execute_method_async("start_worker_execution_loop")
             for worker in self.workers

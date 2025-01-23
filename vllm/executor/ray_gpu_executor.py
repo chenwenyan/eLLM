@@ -325,6 +325,7 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
                                              execute_model_req)
 
     async def _start_worker_execution_loop(self):
+        print("Ray_gpu_executor->Starting worker execution loop")
         coros = [
             worker.execute_method.remote("start_worker_execution_loop")
             for worker in self.workers

@@ -496,7 +496,7 @@ class Scheduler:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
             total_block_ids.extend(_running_block_ids)
 
-        print(f"total_block_ids: {total_block_ids}")    
+        print(f"total_block_ids length: {len(total_block_ids)}")    
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,

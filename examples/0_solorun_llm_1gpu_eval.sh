@@ -15,7 +15,7 @@ export VLLM_LOGGING_LEVEL=DEBUG
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=0
+gpu_id=3
 gpu_memory_utilizations=(0.6)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 # store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B

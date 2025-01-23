@@ -338,6 +338,7 @@ class Worker(WorkerBase):
         You can stop the loop by executing a driver worker with an empty output.
         See `stop_remote_worker_execution_loop` for more details.
         """
+        print(f'start_worker_execution_loop')
         while self._execute_model_non_driver():
             pass
 
@@ -360,7 +361,8 @@ class Worker(WorkerBase):
         # If there is no input, we don't need to execute the model.
         if num_seq_groups == 0:
             return False
-
+        
+        print(f'Worker _execute_model_non_driver, num_seq_groups: {num_seq_groups}')
         self.model_runner.execute_model(None, self.gpu_cache)
         return True
 

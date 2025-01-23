@@ -159,6 +159,7 @@ class DistributedGPUExecutorAsync(DistributedGPUExecutor, ExecutorAsyncBase):
             execute_model_req: ExecuteModelRequest) -> List[SamplerOutput]:
         if self.parallel_worker_tasks is None:
             # Start model execution loop running in the parallel workers
+            print("distributed_gpu_executor->start_worker_execution_loop")
             self.parallel_worker_tasks = asyncio.create_task(
                 self._start_worker_execution_loop())
 

@@ -304,7 +304,6 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         # NOTE: Here we assume that all sequences in the group have the same
         # prompt.
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
-        print(f'seq_group.cache_layers is {seq_group.cache_layers}')
 
         # Allocate new physical token blocks that will store the prompt tokens.
         num_prompt_blocks = len(seq.logical_token_blocks)

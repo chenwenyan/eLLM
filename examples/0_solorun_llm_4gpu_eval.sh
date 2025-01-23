@@ -23,8 +23,9 @@ gpu_memory_utilizations=(0.8)
 store_cache_layerss=(0.1)
 
 models=(meta-llama/Llama-2-70b-hf)
+# models=(meta-llama/Llama-2-13b-hf)
 # request_rates=(50 100 150 200 250 300)
-request_rates=(10)
+request_rates=(5)
 num_prompts=(100)
 seeds=(1)
 max_num_seqs=512
@@ -33,7 +34,7 @@ dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 scheduling_policy=fcfs
 wt_weights=(1.0)
 # wt_weights=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-
+flatten_layers=10
 
 rm server.log
 rm client.log
@@ -77,7 +78,7 @@ for seed in ${seeds[@]}; do
                             --scheduling-policy ${scheduling_policy} \
                             --wt-weight ${wt_weight} \
                             --preemption-mode ${preemption_mode} \
-                            --flatten-layers 10 \
+                            --flatten-layers ${flatten_layers} \
                             --disable-log-requests > server.log 2>&1 &
                             # > ${path_dir}/${model_name}_server_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log & 
                         # > server.log 2>&1 &
