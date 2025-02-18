@@ -124,6 +124,7 @@ def get_neuron_model(model_config: ModelConfig,
         continuous_batching=continuous_batching_config)
 
     # Load the weights from the cached or downloaded files.
+    # TODO: wenyan (Modify batch size from the scheduler_config.max_num_seqs)
     model.load_weights(
         model_config.model,
         tp_degree=parallel_config.tensor_parallel_size,

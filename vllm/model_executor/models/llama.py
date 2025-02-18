@@ -118,7 +118,7 @@ class HFusedLlamaMLP(nn.Module):
         # print("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
         ops.hfused_mlp(last_out, out, last_x, x, weight, bias) 
         # print("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         return last_out, out
     
 class LlamaAttention(nn.Module):
@@ -245,7 +245,6 @@ class LlamaDecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.output_tokens_length = []
         rope_theta = getattr(config, "rope_theta", 10000)
         rope_scaling = getattr(config, "rope_scaling", None)
         if rope_scaling is not None and getattr(
@@ -310,108 +309,27 @@ class LlamaDecoderLayer(nn.Module):
         last_residual: Optional[torch.Tensor] = None,
     ):
         # Self Attention
-        
         if not fused:
-            import torch.cuda as cuda 
-            import math
-            # if attn_metadata.slot_mapping is not None:
-                # print(f'attn_metadata.slot_mapping: {attn_metadata.slot_mapping}')
-            token_num = attn_metadata.num_prefill_tokens
-            block_size = 16
-            skip_swap = False
-            self.num_blocks = math.ceil(token_num/block_size)
-            if token_num in self.output_tokens_length:
-                skip_swap=True
-            # with different priority: -1 higher priority, 0 default priority
-            stream1 = cuda.Stream(priority=0)
-            stream2 = cuda.Stream(priority=0) 
-            stream3 = cuda.Stream(priority=0)
-            if not skip_swap:
-                with cuda.stream(stream1):
-                    # init 1000 tensors
-                    # kv_cache shape: (2, num_blocks, block_size * num_kv_heads * head_size)
-                    # num_blocks is 327, block_size is 16, num_kv_heads is 40, head_size is 128
-                    num_kv_heads = 40
-                    head_size = 128
-                    total_size = block_size * num_kv_heads * head_size
-                    cpu_cache = torch.randn(2, self.num_blocks, total_size, pin_memory=True)
-                    gpu_cache = torch.empty_like(cpu_cache, device='cuda')
-                    # record time
-                    cpu_to_gpu_st = cuda.Event(enable_timing=True)
-                    cpu_to_gpu_et = cuda.Event(enable_timing=True)
-                    cpu_to_gpu_st.record()
-                    # use async copy
-                    # gpu_cache = cpu_cache.cuda(non_blocking=True)
-                    gpu_cache.copy_(cpu_cache)
-                    cpu_to_gpu_et.record()
-                    del cpu_cache
-                    del gpu_cache
-
-                with cuda.stream(stream3):
-                    total_size = block_size * num_kv_heads * head_size
-                    gpu_cache = torch.randn(2, self.num_blocks, total_size, device='cuda')
-                    cpu_cache1 = torch.empty_like(gpu_cache, pin_memory=True,device='cpu')
-
-                    # record time
-                    gpu_to_cpu_st = cuda.Event(enable_timing=True)
-                    gpu_to_cpu_et = cuda.Event(enable_timing=True)
-                    gpu_to_cpu_st.record()
-                    # use torch copy
-                    cpu_cache1.copy_(gpu_cache)
-                    gpu_to_cpu_et.record()
-                    del gpu_cache
-                    del cpu_cache1
-
-            with cuda.stream(stream2): 
-                # record time
-                opt_st = cuda.Event(enable_timing=True)
-                opt_et = cuda.Event(enable_timing=True)
-                opt_st.record()
-    
-                if residual is None:
-                    residual = hidden_states
-                    hidden_states = self.input_layernorm(hidden_states)
-                else:
-                    hidden_states, residual = self.input_layernorm(
-                        hidden_states, residual)
-                hidden_states = self.self_attn(
-                    positions=positions,
-                    hidden_states=hidden_states,
-                    kv_cache=kv_cache,
-                    attn_metadata=attn_metadata,
-                )
-
-                # Fully Connected
-                hidden_states, residual = self.post_attention_layernorm(
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(
                     hidden_states, residual)
-                hidden_states = self.mlp(hidden_states)
-                opt_et.record()
-            if not skip_swap:
-                stream1.synchronize()
-                stream2.synchronize()
-            stream3.synchronize()
+            hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+            )
 
-            if not skip_swap:
-                # print(f'num_blocks: {self.num_blocks}, token_num: {token_num}')
-                # print(f"cpu to gpu: {round(cpu_to_gpu_st.elapsed_time(cpu_to_gpu_et),7)} ms")
-                # print(f"gpu to cpu: {round(gpu_to_cpu_st.elapsed_time(gpu_to_cpu_et),7)} ms")
-                # print(f"computation time: {round(opt_st.elapsed_time(opt_et),7)} ms")
-
-                # print the json data
-                res_json = {
-                    "token_num": token_num,
-                    "cpu_to_gpu": round(cpu_to_gpu_st.elapsed_time(cpu_to_gpu_et),7),
-                    "gpu_to_cpu": round(gpu_to_cpu_st.elapsed_time(gpu_to_cpu_et),7),
-                    "computation_time": round(opt_st.elapsed_time(opt_et),7)
-                }
-                print(f'res_json is: {res_json}')
-
-                self.output_tokens_length.append(token_num)
-            torch.cuda.empty_cache()
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
             return hidden_states, residual
         
         else:
-            
             if last_residual is None:
                 last_residual = last_hidden_states
                 last_hidden_states = self.input_layernorm(last_hidden_states)
@@ -444,9 +362,25 @@ class LlamaDecoderLayer(nn.Module):
             last_hidden_states, hidden_states = self.hfused_mlp(
                 last_hidden_states, hidden_states)
             
+            last_hidden_states, hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                fused=True,
+                last_positions=last_positions,
+                last_hidden_states=last_hidden_states,
+                last_kv_cache=last_kv_cache,
+                last_attn_metadata=last_attn_metadata,
+            )
+
+            last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
+                last_hidden_states, hidden_states, last_residual, residual)
+            
+            last_hidden_states, hidden_states = self.hfused_mlp(
+                last_hidden_states, hidden_states)
+
             return last_hidden_states, last_residual, hidden_states, residual
-
-
 
 class LlamaModel(nn.Module):
 
@@ -488,12 +422,14 @@ class LlamaModel(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
+    from vllm.sequence import SequenceGroupMetadata
     def forward(
         self,
         input_ids: Optional[torch.Tensor],
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if inputs_embeds is not None:
@@ -501,7 +437,7 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        # print('kv_caches_length: ', len(kv_caches))
+        print('kv_caches_length: ', len(kv_caches))
         # 判断kv caches是否为空
         if attn_metadata.prefill_metadata is not None:
             self.last_attn_metadata = attn_metadata
@@ -533,9 +469,10 @@ class LlamaModel(nn.Module):
                         residual,
                     )
         else: 
+            layer_indexs = [seq_data['layer_index'] for seq_data in seq_data_list]
             # 第一次prefilling时不需要并行，decoding阶段需要并行
-            for i in range(len(self.layers)-1):
-                # print(f'layer: {i}')
+            i = 0
+            while i < len(self.layers) - 2:
                 if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-4:
                     hidden_states, residual = self.layers[i](
                         positions,
@@ -545,6 +482,14 @@ class LlamaModel(nn.Module):
                         residual,
                     )  
                 else:
+                    # print(f'fused layer: {i}')
+                    if i in layer_indexs:
+                        input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
+                        if inputs_embeds is None:
+                            hidden_states = self.get_input_embeddings(input_ids)
+                        positions = seq_data_list[layer_indexs.index(i)]['positions']
+                        attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
+
                     # horizonal kernel fusion
                     last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
                         positions,
@@ -562,8 +507,20 @@ class LlamaModel(nn.Module):
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
                     # print(f"hidden_states: {hidden_states.shape}, residual: {residual.shape}")
-                i+=2
+                    # print(f'after added, fused layer: {i}')
+                    i += 2 # skip two layers
+                    continue  # 跳过当前迭代，进入下一次迭代
+                i += 1
+
             # The last layer is not fused
+            hidden_states, residual = self.layers[-2](
+                positions,
+                hidden_states,
+                None,
+                attn_metadata,
+                residual,
+            )
+
             hidden_states, residual = self.layers[-1](
                 positions,
                 hidden_states,
@@ -639,9 +596,16 @@ class LlamaForCausalLM(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
+        st = torch.cuda.Event(enable_timing=True)
+        en = torch.cuda.Event(enable_timing=True)
+        st.record()
         hidden_states = self.model(input_ids, positions, kv_caches,
-                                   attn_metadata)
+                                   attn_metadata, seq_data_list)
+        en.record()
+        torch.cuda.synchronize()
+        print(f'forward time: {st.elapsed_time(en)} ms')
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,

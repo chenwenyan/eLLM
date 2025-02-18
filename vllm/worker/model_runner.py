@@ -49,7 +49,7 @@ class ModelInput(NamedTuple):
     num_prefill_tokens: int
     num_decode_tokens: int
     num_prefills: int
-
+    cache_layers: List[int]
     @classmethod
     def empty(cls, device):
         return ModelInput(
@@ -65,6 +65,7 @@ class ModelInput(NamedTuple):
             num_prefill_tokens=0,
             num_decode_tokens=0,
             num_prefills=0,
+            cache_layers=[],
         )
 
 
@@ -250,6 +251,7 @@ class ModelRunner:
         num_prefills = 0
         num_prefill_tokens = 0
         num_decode_tokens = 0
+        cache_layers: List[int] = []
 
         # The following fields are only for flashinfer
         # Please follow https://docs.flashinfer.ai/tutorials/kv_layout.html#page-layout
@@ -275,6 +277,7 @@ class ModelRunner:
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
+            print(f'seq_group_metadata.cache_layers is {seq_group_metadata.cache_layers}')
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
@@ -287,6 +290,7 @@ class ModelRunner:
                         "now.")
 
                 seq_data = seq_group_metadata.seq_data[seq_id]
+                
                 if is_prompt:
                     context_len = seq_data.get_num_computed_tokens()
                 else:
@@ -370,6 +374,8 @@ class ModelRunner:
                 query_len = seq_len - context_len
                 query_lens.append(query_len)
                 input_tokens.extend(tokens)
+                cache_layers.append(seq_group_metadata.cache_layers)
+                # TODO: wenyan
                 input_positions.extend(list(range(context_len, seq_len)))
                 lora_id = seq_group_metadata.lora_int_id
 
@@ -613,6 +619,7 @@ class ModelRunner:
             num_prefill_tokens=num_prefill_tokens,
             num_decode_tokens=num_decode_tokens,
             num_prefills=num_prefills,
+            cache_layers=cache_layers,
         )
 
     def prepare_input_tensors(
@@ -638,6 +645,7 @@ class ModelRunner:
                 num_prefill_tokens,
                 num_decode_tokens,
                 num_prefills,
+                cache_layers,
             ) = self._prepare_model_input(seq_group_metadata_list)
             sampling_metadata = SamplingMetadata.prepare(
                 seq_group_metadata_list, seq_lens, query_lens, self.device,
@@ -655,6 +663,7 @@ class ModelRunner:
                 "num_decode_tokens": num_decode_tokens,
                 "slot_mapping": slot_mapping,
                 "num_prefills": num_prefills,
+                "cache_layers": cache_layers,
             }
             if attn_metadata:
                 metadata_dict.update(attn_metadata.asdict_zerocopy())
@@ -668,6 +677,7 @@ class ModelRunner:
             lora_mapping = metadata_dict.pop("lora_mapping")
             lora_requests = metadata_dict.pop("lora_requests")
             multi_modal_input = metadata_dict.pop("multi_modal_input")
+            cache_layers = metadata_dict.pop("cache_layers")
             if metadata_dict:
                 attn_metadata = self.attn_backend.make_metadata(
                     **metadata_dict)
@@ -682,7 +692,40 @@ class ModelRunner:
 
         return (input_tokens, input_positions, attn_metadata,
                 sampling_metadata, lora_requests, lora_mapping,
-                multi_modal_input)
+                multi_modal_input,cache_layers)
+    def generate_atten_metadata(self, attn_metadata: AttentionMetadata, cache_layer_index: int):
+        num_prefills = attn_metadata.num_prefills
+        num_prefill_tokens = attn_metadata.num_prefill_tokens
+        num_decode_tokens = attn_metadata.num_decode_tokens
+        seq_lens = [attn_metadata.seq_lens[cache_layer_index]]
+        slot_mapping_tensor = attn_metadata.slot_mapping[cache_layer_index]
+        block_tables = attn_metadata.block_tables[cache_layer_index]
+        max_query_len = attn_metadata.max_query_len
+        max_prefill_seq_len = attn_metadata.max_prefill_seq_len
+        max_decode_seq_len = attn_metadata.max_decode_seq_len
+        query_start_loc = attn_metadata.query_start_loc[cache_layer_index]
+        seq_start_loc = attn_metadata.seq_start_loc[cache_layer_index]
+        context_lens_tensor = attn_metadata.context_lens_tensor[cache_layer_index]
+        seq_lens_tensor = attn_metadata.seq_lens_tensor[cache_layer_index]
+        use_captured_graph = attn_metadata.use_cuda_graph
+
+        sub_attn_metadata = self.attn_backend.make_metadata(num_prefills=num_prefills,
+                slot_mapping=slot_mapping_tensor,
+                num_prefill_tokens=num_prefill_tokens,
+                num_decode_tokens=num_decode_tokens,
+                seq_lens=seq_lens,
+                seq_lens_tensor=seq_lens_tensor,
+                max_query_len=max_query_len,
+                total_seq_len=sum(seq_lens),
+                max_prefill_seq_len=max_prefill_seq_len,
+                max_decode_seq_len=max_decode_seq_len,
+                query_start_loc=query_start_loc,
+                seq_start_loc=seq_start_loc,
+                context_lens_tensor=context_lens_tensor,
+                block_tables=block_tables,
+                use_cuda_graph=use_captured_graph,)
+
+        return sub_attn_metadata
 
     @torch.inference_mode()
     def execute_model(
@@ -691,7 +734,7 @@ class ModelRunner:
         kv_caches: List[torch.Tensor],
     ) -> Optional[SamplerOutput]:
         (input_tokens, input_positions, attn_metadata, sampling_metadata,
-         lora_requests, lora_mapping, multi_modal_input
+         lora_requests, lora_mapping, multi_modal_input,cache_layers
          ) = self.prepare_input_tensors(seq_group_metadata_list)
 
         if self.lora_config:
@@ -706,6 +749,51 @@ class ModelRunner:
         else:
             model_executable = self.model
         
+        # 新建一个字典，用于存储每一层的输入数据
+        st = torch.cuda.Event(enable_timing=True)
+        et = torch.cuda.Event(enable_timing=True)
+        st.record()
+        # _seq_group_metadata_dict = {}
+        print(sampling_metadata.selected_token_indices)
+        seq_data_list = []
+        for cache_layer in cache_layers:
+            cache_layer_index = cache_layers.index(cache_layer)
+            cache_layer_index = cache_layer_index - 1
+            sub_input_tokens = input_tokens[cache_layer_index]
+            sub_input_positions = input_positions[cache_layer_index]
+            sub_attn_metadata = self.generate_atten_metadata(attn_metadata, cache_layer_index)
+            seq_data_list.append({
+                'layer_index': cache_layer_index,
+                'input_ids': sub_input_tokens,
+                'positions': sub_input_positions,
+                'attn_metadata': sub_attn_metadata,
+            })
+
+        # print(f'MODEL_RUNNER: len(seq_group_metadata_list) is {len(seq_group_metadata_list)}')       
+        # for seq_group_metadata in seq_group_metadata_list:
+        #     cache_layers = seq_group_metadata.cache_layers
+        #     layer_index = cache_layers - 1
+            
+        #     if layer_index not in _seq_group_metadata_dict:
+        #         _seq_group_metadata_dict[layer_index] = [seq_group_metadata]
+        #     else:
+        #         _seq_group_metadata_dict[layer_index].append(seq_group_metadata)
+
+        # seq_data_list = []
+        # for layer_index, seq_group_metadata_list in _seq_group_metadata_dict.items():
+        #     (input_tokens, input_positions, attn_metadata, sampling_metadata,
+        #         lora_requests, lora_mapping, multi_modal_input
+        #     ) = self.prepare_input_tensors(seq_group_metadata_list)
+        #     seq_data_list.append({
+        #         'layer_index': layer_index,
+        #         'input_ids': input_tokens,
+        #         'positions': input_positions,
+        #         'attn_metadata': attn_metadata,
+        #     })
+
+        et.record()
+        torch.cuda.synchronize()
+        print(f'prepare_input_tensors time is {st.elapsed_time(et)} ms')   
             
         execute_model_kwargs = {
             "input_ids": input_tokens,
@@ -713,6 +801,7 @@ class ModelRunner:
             # TODO: concat kv_caches into 8 layers
             "kv_caches": kv_caches, #8layer [[0,8,16,24],[1,9,17,25],...]
             "attn_metadata": attn_metadata,
+            "seq_data_list": seq_data_list,
         }
         # print(f'MODEL_RUNNER: attn_metadata.seq_lens is {attn_metadata.seq_lens}')
         if self.vision_language_config:
@@ -798,8 +887,8 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        # kv_caches = [None] * int(num_layers)
-        kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
+        kv_caches = [None] * int(num_layers)
+        # kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return

@@ -126,6 +126,7 @@ class ModelConfig:
         self.dtype = _get_and_verify_dtype(self.hf_text_config, dtype)
         self.max_model_len = _get_and_verify_max_len(self.hf_text_config,
                                                      max_model_len)
+        self.max_model_len = 4096
         self.served_model_name = get_served_model_name(model,
                                                        served_model_name)
         if not self.skip_tokenizer_init:
@@ -327,6 +328,7 @@ class CacheConfig:
         sliding_window: Optional[int] = None,
         enable_prefix_caching: bool = False,
         store_cache_layers: float = 1.0,
+        flatten_layers: int = 10,
     ) -> None:
         self.block_size = block_size 
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -342,8 +344,13 @@ class CacheConfig:
         self.num_gpu_blocks = None
         self.num_cpu_blocks = None
 
+        # add new field to get num layers of any model
+        self.num_layers = None
         # add new field to store the cache layers
         self.store_cache_layers = store_cache_layers
+    
+        # flatten layers for kv cache
+        self.flatten_layers = flatten_layers
 
     def metrics_info(self):
         # convert cache_config to dict(key: str, value: str) for prometheus
@@ -1247,6 +1254,7 @@ class EngineConfig:
         """
         self.model_config.verify_with_parallel_config(self.parallel_config)
         self.cache_config.verify_with_parallel_config(self.parallel_config)
+        self.cache_config.num_layers = self.model_config.get_num_layers(self.parallel_config)
 
         if self.lora_config:
             self.lora_config.verify_with_model_config(self.model_config)
