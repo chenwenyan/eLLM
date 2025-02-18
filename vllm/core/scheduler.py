@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig
+from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig, ModelConfig
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.core.policy import Policy, PolicyFactory
 from vllm.logger import init_logger
@@ -15,6 +15,12 @@ from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
                            SequenceGroupMetadata, SequenceStatus)
 
 import torch
+
+import cvxpy as cp
+import numpy as np
+from scipy.optimize import minimize
+import time
+from functools import partial
 
 logger = init_logger(__name__)
 
@@ -267,10 +273,12 @@ class Scheduler:
         self,
         scheduler_config: SchedulerConfig,
         cache_config: CacheConfig,
+        model_config: ModelConfig,
         lora_config: Optional[LoRAConfig],
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
+        self.model_config = model_config
         # Note for LoRA scheduling: the current policy is extremely
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
@@ -982,6 +990,113 @@ class Scheduler:
             num_lookahead_slots=self._get_num_lookahead_slots(is_prefill),
         )
 
+    
+    def get_opt_bs_and_layers(self):
+
+        self.hidden_size=self.model_config.get_hidden_size()
+        self.num_layers=self.cache_config.num_layers
+        self.vocab_size=self.model_config.get_vocab_size()
+        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
+        self.M_G = 80 * 1024 * 1024 * 1024  # 16GB
+        self.M_W = 26 * 1024 * 1024 * 1024  # 26GB
+        # get request length of each request in the batch
+
+        req_num = len(self.running)
+        request_lengths = [len(self.running[i].prompt) for i in range(req_num)]
+        print(f"req_num: {req_num}")
+        print(f"request_lengths: {request_lengths}")
+
+        h = self.hidden_size
+        L = self.num_layers
+        V = self.vocab_size
+        R = len(request_lengths)
+        s_r = request_lengths
+        self.epsilon = 10
+        self.I = 4
+        self.SLO = 0.001
+
+        st = time.time()
+
+        def T_r(l_i, r):
+            A_r = 24 * s_r[r] * h**2 + 4 * s_r[r]**2 * h
+            B_r = 24 * h**2 + 4 * h - 20 * s_r[r] * h**2 - 4 * s_r[r]**2 * h
+            C_r = 2 * s_r[r] * h * V + 2 * h * V + 2 * self.epsilon
+            return A_r * L + B_r * l_i + C_r
+
+        # 定义目标函数
+        def objective(vars):
+            b_i = vars[:self.I].astype(int)  # 前I个变量是b_i
+            l = vars[self.I:]  # 后I个变量是l
+            obj = 0
+            for i in range(self.I):
+                sum_T_r = sum(T_r(l[i], r) for r in range(b_i[i]))
+                # obj += b_i[i] * FLOPS / sum_T_r
+                obj +=  sum_T_r / (b_i[i] * self.FLOPS)
+            return obj  # 最大化问题转化为最小化问题
+
+        # 修正约束条件
+        def constraint_memory(vars, i):
+            b_i = vars[:self.I]
+            l = vars[self.I:]
+            current_b = int(b_i[i])
+            sum_sr = sum(s_r[r] for r in range(current_b)) if current_b > 0 else 0
+            upper_bound = min((self.M_G - self.M_W) / (2 * h * sum_sr) if sum_sr != 0 else L, L)
+            return upper_bound - l[i]
+
+        def constraint_total_batch(vars):
+            return np.sum(vars[:self.I]) - R
+
+        def constraint_total_SLO(vars, i):
+            total_time = 0
+            for k in range(i):
+                b = int(vars[k])
+                sum_T_r = sum(T_r(vars[self.I+k], r) for r in range(b))
+                total_time += sum_T_r / self.FLOPS
+            return self.SLO - total_time
+
+        # 初始化方法：保证初始batch总和=R
+        def initialize_batch(I, R):
+            base = R // I
+            remainder = R % I
+            initial_b = np.full(I, base)
+            initial_b[:remainder] += 1
+            return initial_b.astype(float)
+
+        # 初始猜测值
+        initial_b = initialize_batch(self.I, R)
+        initial_guess = np.concatenate((initial_b, np.full(self.I, L/2)))
+
+        # 约束条件
+        constraints = [
+            {'type': 'eq', 'fun': constraint_total_batch}
+        ]
+        for i in range(self.I):
+            constraints.append({'type': 'ineq', 'fun': partial(constraint_memory, i=i)})
+            constraints.append({'type': 'ineq', 'fun': partial(constraint_total_SLO, i=i)})
+
+
+        # 边界条件
+        bounds = [(1, R-self.I+1)] * self.I + [(1, L)] * self.I  # batch下限设为1
+
+        # 优化执行
+        result = minimize(objective, initial_guess, method='SLSQP', 
+                        bounds=bounds, constraints=constraints,
+                        options={'maxiter': 100, 'disp': True})
+
+        # 后处理整数转换
+        final_b = np.round(result.x[:self.I]).astype(int)
+        remainder = R - np.sum(final_b)
+        # 调整余数分配
+        if remainder != 0:
+            indices = np.argsort(result.x[:self.I] - final_b)[-remainder:]
+            final_b[indices] += 1
+
+        et = time.time()
+        print("Time elapsed:", (et - st)*1000, "ms")   
+        print("Optimal batch sizes:", final_b)
+        print("Optimal cache layers:", result.x[self.I:].astype(int))
+        return final_b, result.x[self.I:].astype(int) 
+
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
         # Schedule sequence groups.
         # This function call changes the internal states of the scheduler
@@ -994,6 +1109,10 @@ class Scheduler:
         # TODO: wenyan
         # cache_layers = random.choice([4, 8, 20])
         cache_layers = random.choice([10, 20, 40])
+
+        batch_sizes, cache_layers = self.get_opt_bs_and_layers()
+        print(f'batch_sizes: {batch_sizes}, cache_layers: {cache_layers}')
+
         for i, scheduled_seq_group in enumerate(
                 scheduler_outputs.scheduled_seq_groups):
             seq_group = scheduled_seq_group.seq_group
