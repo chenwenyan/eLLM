@@ -38,8 +38,8 @@ wt_weights=(1.0)
 # wt_weights=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 
 
-rm server.log
-rm client.log
+# rm server.log
+# rm client.log
 
 wait_for_server() {
     local port=$1
