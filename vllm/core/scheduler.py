@@ -797,7 +797,7 @@ class Scheduler:
             self.cache_layers_arr = [20]
         else:
             if not self.batch_sizes_arr or not self.cache_layers_arr:
-                self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers()
+                self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers_2()
  
         
         #把batch_sizes, cache_layers转成一个队列
@@ -1021,13 +1021,13 @@ class Scheduler:
         )
 
     
-    def get_opt_bs_and_layers_backup(self):
+    def get_opt_bs_and_layers(self):
 
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
         self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * 0.6  # 80GB
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization)
         self.M_W = 26  # 26GB
         # get request length of each request in the batch
 
@@ -1122,13 +1122,13 @@ class Scheduler:
         return final_b, final_l.astype(int)
 
 
-    def get_opt_bs_and_layers(self):
+    def get_opt_bs_and_layers_backup(self):
 
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
         self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * 0.6  # 80GB
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1)
         self.M_W = 26  # 26GB
         # get request length of each request in the batch
 
@@ -1138,7 +1138,7 @@ class Scheduler:
         R = len(self.request_lengths)
         s_r = self.request_lengths
         self.epsilon = 10
-        self.I = 5
+        self.I = 6
         self.SLO = 0.001
 
         st = time.time()
@@ -1221,6 +1221,102 @@ class Scheduler:
         print("Optimal batch sizes:", final_b)
         print("Optimal cache layers:", final_l.astype(int))
         return final_b, final_l.astype(int)
+    
+    def get_opt_bs_and_layers_2(self):
+
+        self.hidden_size=self.model_config.get_hidden_size()
+        self.num_layers=self.cache_config.num_layers
+        self.vocab_size=self.model_config.get_vocab_size()
+        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1)
+        self.M_W = 26  # 26GB
+        # get request length of each request in the batch
+
+        h = self.hidden_size
+        L = self.num_layers
+        V = self.vocab_size
+        R = len(self.request_lengths)
+        s_r = self.request_lengths
+        self.epsilon = 20
+        self.I = 6
+        self.SLO = 0.001
+        st = time.time()
+        # 预计算 A_r, B_r, C_r
+        A = []
+        B = []
+        C = []
+        for s_r in self.request_lengths:
+            a = 24 * s_r * h**2 + 4 * s_r**2 * h
+            b = 24 * h**2 + 4 * h - 20 * s_r * h**2 - 4 * s_r**2 * h
+            c = 2 * s_r * h * V + 2 * h * V + 2 * self.epsilon
+            A.append(a)
+            B.append(b)
+            C.append(c)
+
+        # 目标函数
+        def objective(vars):
+            b, l = vars
+            if b < 1 or b > R:
+                return np.inf  # 无效的 b 值
+            sum_AL = sum(A[r] * L for r in range(int(b)))
+            sum_BL = sum(B[r] * l for r in range(int(b)))
+            sum_C = sum(C[r] for r in range(int(b)))
+            numerator = sum_AL + sum_BL + sum_C
+            return numerator / (b * self.FLOPS)
+
+        # 约束条件
+        def constraint1(vars):
+            b, l = vars
+            sum_AL = sum(A[r] * L for r in range(int(b)))
+            sum_BL = sum(B[r] * l for r in range(int(b)))
+            sum_C = sum(C[r] for r in range(int(b)))
+            return (sum_AL + sum_BL + sum_C) / self.FLOPS - self.SLO  # 应小于等于 0
+
+        def constraint2(vars):
+            b, l = vars
+            sum_lhs = sum(2 * l * self.request_lengths[r] * h for r in range(int(b))) + self.M_W
+            return sum_lhs - self.M_G  # 应小于等于 0
+
+        def constraint3(vars):
+            return vars[1] - L  # l <= L
+
+        def constraint4(vars):
+            return vars[0] - R  # b <= R
+
+        # 定义约束字典
+        constraints = [
+            {'type': 'ineq', 'fun': lambda vars: -constraint1(vars)},  # <= SLO
+            {'type': 'ineq', 'fun': lambda vars: -constraint2(vars)},  # <= M_G
+            {'type': 'ineq', 'fun': constraint3},  # l <= L
+            {'type': 'ineq', 'fun': constraint4},  # b <= R
+        ]
+
+        # 变量边界
+        bounds = [(1, R), (0, L)]  # b >= 1, l >= 0
+
+        # 初始猜测
+        initial_guess = [20, 10]
+
+        # 调用优化器
+        solution = minimize(
+            objective,
+            initial_guess,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints,
+            options={'maxiter': 50, 'disp': True},
+        )
+
+        et = time.time()
+        print("Time:", (et - st)*1000, "ms")
+        # 输出结果
+        b_opt, l_opt = solution.x
+        final_l = np.round(l_opt).astype(int)
+        final_l = np.maximum(final_l, 4 * np.ones(self.I)) // 4 * 4
+        print(f"Optimal b: {b_opt}")
+        print(f"Optimal l: {l_opt}")
+        print(f"Objective value: {solution.fun}")
+        return [int(b_opt)], [final_l]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
         # Schedule sequence groups.
@@ -1269,7 +1365,7 @@ class Scheduler:
 
             # It assumes the scheduled_seq_groups is ordered by
             # prefill < decoding.
-            print(f'scheduler->seq_group.cache_layers is {self.cache_layers}')
+            # print(f'scheduler->seq_group.cache_layers is {self.cache_layers}')
             is_prompt = seq_group.is_prefill()
             seq_group_metadata = SequenceGroupMetadata(
                 request_id=seq_group.request_id,
@@ -1293,7 +1389,7 @@ class Scheduler:
             )
             seq_group.update_cache_layers(self.cache_layers)
             seq_group_metadata.update_cache_layers(self.cache_layers)
-            print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
+            # print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
 
         # Now that the batch has been created, we can assume all blocks in the

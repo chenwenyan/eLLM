@@ -277,7 +277,7 @@ class ModelRunner:
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
-            print(f'seq_group_metadata.cache_layers is {seq_group_metadata.cache_layers}')
+            # print(f'seq_group_metadata.cache_layers is {seq_group_metadata.cache_layers}')
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
