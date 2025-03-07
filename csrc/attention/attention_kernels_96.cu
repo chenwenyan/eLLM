@@ -623,7 +623,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
      float* __restrict__ max_logits,  // [num_seqs, num_heads,
                                       // max_num_partitions]
      scalar_t* __restrict__ last_out,  // [num_seqs, num_heads, head_size]
-     const scalar_t* __restrict__ last_q, // [num_seqs, num_heads, head_size]
+     const scalar_t* __restrict__ last_q,       // [num_seqs, num_heads, head_size]
      scalar_t* __restrict__ out,  // [num_seqs, num_heads, max_num_partitions,
                                   // head_size]
      const scalar_t* __restrict__ q,       // [num_seqs, num_heads, head_size]
@@ -1165,7 +1165,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
 
 // TODO(woosuk): Tune NUM_THREADS.
   template <typename T, typename CACHE_T, int BLOCK_SIZE,
-  vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 128>
+  vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 96>
   void fused_paged_attention_v1_launcher(
     torch::Tensor& last_out, torch::Tensor& last_q,
     torch::Tensor& out, torch::Tensor& query, torch::Tensor& key_cache,
@@ -1188,6 +1188,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
     alibi_slopes
     ? reinterpret_cast<const float*>(alibi_slopes.value().data_ptr())
     : nullptr;
+
     T* last_out_ptr = reinterpret_cast<T*>(last_out.data_ptr());
     T* last_q_ptr = reinterpret_cast<T*>(last_q.data_ptr());
     T* out_ptr = reinterpret_cast<T*>(out.data_ptr());

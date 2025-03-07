@@ -623,7 +623,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
      float* __restrict__ max_logits,  // [num_seqs, num_heads,
                                       // max_num_partitions]
      scalar_t* __restrict__ last_out,  // [num_seqs, num_heads, head_size]
-     const scalar_t* __restrict__ last_q, // [num_seqs, num_heads, head_size]
+     const scalar_t* __restrict__ last_q,       // [num_seqs, num_heads, head_size]
      scalar_t* __restrict__ out,  // [num_seqs, num_heads, max_num_partitions,
                                   // head_size]
      const scalar_t* __restrict__ q,       // [num_seqs, num_heads, head_size]
@@ -1188,6 +1188,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
     alibi_slopes
     ? reinterpret_cast<const float*>(alibi_slopes.value().data_ptr())
     : nullptr;
+
     T* last_out_ptr = reinterpret_cast<T*>(last_out.data_ptr());
     T* last_q_ptr = reinterpret_cast<T*>(last_q.data_ptr());
     T* out_ptr = reinterpret_cast<T*>(out.data_ptr());

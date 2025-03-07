@@ -596,6 +596,9 @@ class SequenceGroup:
     def update_cache_layers(self, layers: int):
         self.cache_layers = layers
 
+    def get_len(self) -> int:
+        return sum(seq.get_len() for seq in self.get_seqs())    
+
 
 class SequenceGroupMetadata:
     """Metadata for a sequence group. Used to create `AttentionMetadata`.

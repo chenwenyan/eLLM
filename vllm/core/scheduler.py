@@ -434,8 +434,10 @@ class Scheduler:
         # groups to preempt.
         now = time.time()
         running_queue = policy.sort_by_priority(now, running_queue)
-        
+
+        swapped_out_tokens = 0
         while running_queue:
+
             seq_group = running_queue[0]
             num_running_tokens = self._get_num_new_tokens(
                 seq_group, SequenceStatus.RUNNING, enable_chunking, budget)
@@ -464,6 +466,7 @@ class Scheduler:
                         preempted.append(victim_seq_group)
                     else:
                         swapped_out.append(victim_seq_group)
+                        swapped_out_tokens += victim_seq_group.get_len()
                 else:
                     # No other sequence groups can be preempted.
                     # Preempt the current sequence group.
@@ -475,6 +478,7 @@ class Scheduler:
                         preempted.append(seq_group)
                     else:
                         swapped_out.append(seq_group)
+                        swapped_out_tokens += seq_group.get_len()
                     break
             else:
                 self._append_slots(seq_group, blocks_to_copy)
@@ -499,6 +503,7 @@ class Scheduler:
                     budget.add_num_seqs(seq_group.request_id, num_running_seqs)
                 if curr_loras is not None and seq_group.lora_int_id > 0:
                     curr_loras.add(seq_group.lora_int_id)
+
         total_block_ids:List[int] = []
         for seq_group in decode_seq_groups:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
@@ -507,7 +512,10 @@ class Scheduler:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
             total_block_ids.extend(_running_block_ids)
 
-        print(f"total_block_ids length: {len(total_block_ids)}")    
+        # print(f"total_block_ids length: {len(total_block_ids)}")
+        # print(f"num_blocks: {len(set(total_block_ids))}, token_num: {sum(self.request_lengths)}")  
+
+        print(f"swapped_out_tokens: {swapped_out_tokens}")
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -562,6 +570,7 @@ class Scheduler:
         infeasible_seq_groups: List[SequenceGroup] = []
 
         leftover_swapped: Deque[SequenceGroup] = deque()
+        swapped_in_tokens = 0
         while swapped_queue:
             seq_group = swapped_queue[0]
 
@@ -610,6 +619,7 @@ class Scheduler:
             swapped_queue.popleft()
             # self._swap_in(seq_group, blocks_to_swap_in)
             self._swap_in(seq_group, blocks_to_swap_in, total_block_ids)
+            swapped_in_tokens += seq_group.get_len()
             self._append_slots(seq_group, blocks_to_copy)
             is_prefill = seq_group.is_prefill()
             if is_prefill:
@@ -623,6 +633,7 @@ class Scheduler:
             budget.add_num_seqs(seq_group.request_id, num_new_seqs)
 
         swapped_queue.extendleft(leftover_swapped)
+        print(f"swapped_in_tokens: {swapped_in_tokens}")
 
         return swapped_queue, SchedulerSwappedInOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -789,8 +800,6 @@ class Scheduler:
         self.all_requests = self.running + self.waiting 
         req_num = len(self.running) + len(self.waiting) 
         self.request_lengths = [len(self.all_requests[i].prompt) for i in range(req_num)]
-        print(f"req_num: {req_num}")
-        print(f"request_lengths: {self.request_lengths}")
 
         if len(self.running) + len(self.waiting) <= 1:
             self.batch_sizes_arr = [1]
@@ -809,6 +818,7 @@ class Scheduler:
         #     token_budget=self.scheduler_config.max_num_batched_tokens,
         #     max_num_seqs=self.scheduler_config.max_num_seqs,
         # )
+
         max_num_seqs = self.batch_sizes_arr.popleft()
         self.cache_layers = self.cache_layers_arr.popleft()
 
@@ -817,6 +827,7 @@ class Scheduler:
             token_budget=self.scheduler_config.max_num_batched_tokens,
             max_num_seqs=max_num_seqs,
         )
+
         # Make sure we include num running seqs before scheduling prefill,
         # so that we don't schedule beyond max_num_seqs for prefill.
         for seq_group in self.running:
@@ -1238,8 +1249,7 @@ class Scheduler:
         R = len(self.request_lengths)
         s_r = self.request_lengths
         self.epsilon = 20
-        self.I = 6
-        self.SLO = 0.001
+        self.SLO = 0.130
         st = time.time()
         # 预计算 A_r, B_r, C_r
         A = []
@@ -1304,7 +1314,7 @@ class Scheduler:
             method='SLSQP',
             bounds=bounds,
             constraints=constraints,
-            options={'maxiter': 50, 'disp': True},
+            options={'maxiter': 20, 'disp': False},
         )
 
         et = time.time()
@@ -1312,11 +1322,12 @@ class Scheduler:
         # 输出结果
         b_opt, l_opt = solution.x
         final_l = np.round(l_opt).astype(int)
-        final_l = np.maximum(final_l, 4 * np.ones(self.I)) // 4 * 4
-        print(f"Optimal b: {b_opt}")
-        print(f"Optimal l: {l_opt}")
+        final_l = np.maximum(final_l, 4 * np.ones(1)) // 4 * 4
+        final_b = int(b_opt)
+        print(f"Optimal b: {final_b}")
+        print(f"Optimal l: {final_l}")
         print(f"Objective value: {solution.fun}")
-        return [int(b_opt)], [final_l]
+        return [int(final_b)], [final_l]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
         # Schedule sequence groups.
@@ -1539,7 +1550,8 @@ class Scheduler:
             seq.status = SequenceStatus.RUNNING
         en_record.record()
         torch.cuda.synchronize()
-        print(f"swap_in time: {st_record.elapsed_time(en_record)} ms")  
+        tokens = np.sum([seq.get_len() for seq in seq_group.get_seqs()])
+        print(f"cpu to gpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}") 
 
     def _swap_out(
         self,
@@ -1565,7 +1577,8 @@ class Scheduler:
             seq.status = SequenceStatus.SWAPPED
         en_record.record()
         torch.cuda.synchronize()
-        print(f"swap_out time: {st_record.elapsed_time(en_record)} ms")    
+        tokens = np.sum([seq.get_len() for seq in seq_group.get_seqs()])
+        print(f"gpu to cpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}")    
 
     def _passed_delay(self, now: float) -> bool:
         if self.prev_prompt:

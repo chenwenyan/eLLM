@@ -189,6 +189,7 @@ class UncachedBlockAllocator(BlockAllocatorBase):
                                        block_hash=-1,
                                        num_hashed_tokens=0)
             free_blocks.append(block)
+        print(f'init_free_blocks: num_blocks is {num_blocks}, len(free_blocks) is {len(free_blocks)}')
         return free_blocks    
 
     def allocate(self,
@@ -307,14 +308,13 @@ class BlockSpaceManagerV1(BlockSpaceManager):
 
         # Allocate new physical token blocks that will store the prompt tokens.
         num_prompt_blocks = len(seq.logical_token_blocks)
-        print(f'num_prompt_blocks is {num_prompt_blocks}, self.block_sliding_window is {self.block_sliding_window}')
 
         block_table: BlockTable = []
         for logical_idx in range(num_prompt_blocks):
-            print(f'logical_idx is {logical_idx}')
-            st = torch.cuda.Event(enable_timing=True)
-            st.record()
-            et = torch.cuda.Event(enable_timing=True)
+            # print(f'logical_idx is {logical_idx}')
+            # st = torch.cuda.Event(enable_timing=True)
+            # st.record()
+            # et = torch.cuda.Event(enable_timing=True)
             if (self.block_sliding_window is not None
                     and logical_idx >= self.block_sliding_window):
                 block = block_table[logical_idx % self.block_sliding_window]
@@ -328,9 +328,9 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                 block = self.gpu_allocator.allocate()
                 # Set the reference counts of the token blocks.
                 block.ref_count = seq_group.num_seqs()
-            et.record()
-            torch.cuda.synchronize()
-            print(f'allocate block time is {st.elapsed_time(et)} ms')
+            # et.record()
+            # torch.cuda.synchronize()
+            # print(f'allocate block time is {st.elapsed_time(et)} ms')
             block_table.append(block)
 
         # print(f'allocate a new block_table_list: len(block_table) is {len(block_table)}, block_number is {block_table[0].block_number}, len(block_table) is {len(block_table)}, block_token_ids is {block_table[0].block_hash}, num_hashed_tokens is {block_table[0].num_hashed_tokens}')
@@ -495,6 +495,7 @@ class BlockSpaceManagerV1(BlockSpaceManager):
                 ), "BlockSpaceManagerV1 does not support lookahead allocation"
         blocks = self._get_physical_blocks(seq_group)
         num_swapped_seqs = seq_group.num_seqs(status=SequenceStatus.SWAPPED)
+        print(f'num_swapped_seqs is {num_swapped_seqs}')
         num_free_blocks = self.gpu_allocator.get_num_free_blocks()
         # NOTE: Conservatively, we assume that every sequence will allocate
         # at least one free block right after the swap-in.

@@ -51,6 +51,8 @@ from vllm.utils import is_hip, print_warning_once
 
 from vllm import _custom_ops as ops
 
+import itertools
+
 
 class LlamaMLP(nn.Module):
 
@@ -422,7 +424,63 @@ class LlamaModel(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
-    from vllm.sequence import SequenceGroupMetadata
+    def get_computation_cost(self, request_lens, recomputed_layers):
+        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.55
+        self.num_layers=self.layers
+        self.hidden_size=self.config.hidden_size
+        self.epsilon=20
+        computation_cost = 0
+        for _ in range(len(recomputed_layers)):
+            computation_cost += (1 / self.FLOPS) * (
+                24 * request_lens * self.hidden_size +
+                4 * request_lens ** 2 +
+                2 * request_lens * self.hidden_size * self.vocab_size +
+                self.epsilon
+            )
+        return computation_cost
+
+    def get_communication_cost(self, swapped_layers, attn_metadata):
+        tokens = 0
+        for i in range(len(swapped_layers)):
+            tokens += self.num_prefill_tokens + attn_metadata.decode_metadata.num_decode_tokens
+        communication_cost = (0.001085 * tokens + 0.1103)/1000 
+        return communication_cost 
+
+    def get_best_layer(self, request_lens, attn_metadata):
+        st = torch.cuda.Event(enable_timing=True)
+        et = torch.cuda.Event(enable_timing=True)
+        st.record()
+        # 所有可能的 recomputed layers 和 swapped layers 的组合
+        layers = [1, 2]
+        best_cost = float('inf')
+        best_recomputed_layers = []
+        best_swapped_layers = []
+
+        # 遍历所有可能的 recomputed layers 和 swapped layers 的组合
+        for layer in range(len(layers)):
+            recomputed_layers = [layer]
+            # swapped layers 是剩余的层
+            swapped_layers = [layer for layer in layers if layer not in recomputed_layers]
+
+            # 计算总成本
+            computation_cost = self.get_computation_cost(request_lens, recomputed_layers)
+            communication_cost = self.get_communication_cost(swapped_layers, attn_metadata)
+            cost_gap = abs(computation_cost - communication_cost)
+
+            # 更新最佳组合
+            if cost_gap < best_cost:
+                best_cost = cost_gap
+                best_recomputed_layers = recomputed_layers
+                best_swapped_layers = swapped_layers
+
+        print(f"Best recomputed layers: {best_recomputed_layers}")
+        print(f"Best swapped layers: {best_swapped_layers}")
+        print(f"Best cost gap: {best_cost}")
+        et.record()
+        torch.cuda.synchronize()
+        print(f'get_best_layer time: {st.elapsed_time(et)} ms')
+        return best_recomputed_layers, best_swapped_layers
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor],
@@ -442,10 +500,9 @@ class LlamaModel(nn.Module):
         if attn_metadata.prefill_metadata is not None:
             self.last_attn_metadata = attn_metadata
             self.last_positions = positions
-            # print(f'prefill_metadata is not None, prefill_metadata: {attn_metadata.prefill_metadata}')
+            self.num_prefill_tokens = attn_metadata.prefill_metadata.num_prefill_tokens
 
             for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)-1):
-            # for i in range(len(self.layers)):
                 layer = self.layers[i]
                 hidden_states, residual = layer(
                     positions,
@@ -490,23 +547,55 @@ class LlamaModel(nn.Module):
                         positions = seq_data_list[layer_indexs.index(i)]['positions']
                         attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
 
-                    # horizonal kernel fusion
-                    last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
-                        positions,
-                        hidden_states,
-                        None,
-                        attn_metadata,
-                        residual,
-                        True,
-                        self.last_positions,
-                        self.last_hidden_states,
-                        kv_caches[int(len(self.layers)*self.cache_config.store_cache_layers)-1],
-                        self.last_attn_metadata,
-                        self.last_residual,
-                    )
+                    # # horizonal kernel fusion
+                    # st = torch.cuda.Event(enable_timing=True)
+                    # et = torch.cuda.Event(enable_timing=True)
+                    # st.record()
+                    stream1 = torch.cuda.Stream()
+                    stream2 = torch.cuda.Stream()
+                    # 判断是否从cpu加载kv caches到gpu，如果加载时间慢，则直接用重新计算的方式
+
+                    total_seq_len = sum([seq_data['attn_metadata'].total_seq_len for seq_data in seq_data_list])
+                    
+                    swapped_layers, recomputed_layers = self.get_best_layer(total_seq_len, attn_metadata)
+                    with torch.cuda.stream(stream1):
+                        # load kv caches from cpu to gpu
+                        print(f'load kv caches from cpu to gpu, layer: {i}')
+                        import time
+                        sleep_time = self.get_communication_cost(swapped_layers, attn_metadata)
+                        print(f'sleep_time: {sleep_time}')
+                        time.sleep(sleep_time)
+
+                    with torch.cuda.stream(stream1):
+                        # load kv caches from cpu to gpu
+                        print(f'load kv caches from cpu to gpu, layer: {i}')
+                        import time
+                        tokens = attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens
+                        sleep_time = (0.001085 * tokens + 0.1103)/1000
+                        print(f'tokens {tokens}, sleep_time: {sleep_time}')
+                        time.sleep(sleep_time)
+
+                    i += len(swapped_layers)
+                    with torch.cuda.stream(stream2):    
+                        last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
+                            positions,
+                            hidden_states,
+                            None,
+                            attn_metadata,
+                            residual,
+                            True,
+                            self.last_positions,
+                            self.last_hidden_states,
+                            kv_caches[int(len(self.layers)*self.cache_config.store_cache_layers)-1],
+                            self.last_attn_metadata,
+                            self.last_residual,
+                        )
+                    # et.record()
+                    # torch.cuda.synchronize()
+                    # print(f'recomputing time: {st.elapsed_time(et)} ms, tokens: {attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens}')
+
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
-                    # print(f"hidden_states: {hidden_states.shape}, residual: {residual.shape}")
                     # print(f'after added, fused layer: {i}')
                     i += 2 # skip two layers
                     continue  # 跳过当前迭代，进入下一次迭代

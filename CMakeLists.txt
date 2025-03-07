@@ -162,6 +162,11 @@ endif()
 set(VLLM_EXT_SRC
   "csrc/cache_kernels.cu"
   "csrc/attention/attention_kernels.cu"
+  "csrc/attention/attention_kernels_32.cu"
+  "csrc/attention/attention_kernels_64.cu"    
+  "csrc/attention/attention_kernels_128.cu"
+  "csrc/attention/attention_kernels_256.cu"
+  "csrc/attention/attention_kernels_512.cu"
   "csrc/pos_encoding_kernels.cu"
   "csrc/activation_kernels.cu"
   "csrc/layernorm_kernels.cu"

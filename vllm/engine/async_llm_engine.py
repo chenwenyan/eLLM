@@ -232,7 +232,6 @@ class _AsyncLLMEngine(LLMEngine):
         request_outputs = self._process_model_outputs(
             output, scheduler_outputs.scheduled_seq_groups,
             scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
-        print("AsyncLLMEngine-request_outputs", len(request_outputs))
 
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)

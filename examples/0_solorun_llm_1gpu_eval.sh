@@ -15,7 +15,7 @@ export VLLM_LOGGING_LEVEL=DEBUG
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=3
+gpu_id=2
 gpu_memory_utilizations=(0.6)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 # store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
@@ -95,7 +95,7 @@ for seed in ${seeds[@]}; do
                             --request-rate ${request_rate} \
                             --num-prompts ${num_prompt} \
                             --endpoint /v1/completions \
-                            --seed ${seed} > client.log     
+                            --seed ${seed} >> client.log     
                             # >> ${path_dir}/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
                         # > client.log     
                         kill -9 $pid 

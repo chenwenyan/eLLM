@@ -233,9 +233,21 @@ class Worker(WorkerBase):
     ) -> None:
         # Issue cache operations.
         if blocks_to_swap_in.numel() > 0:
+            # st = torch.cuda.Event(enable_timing=True)
+            # st.record()
+            # et = torch.cuda.Event(enable_timing=True)
             self.cache_engine.swap_in(blocks_to_swap_in)
+            # et.record()
+            # torch.cuda.synchronize()
+            # print(f'swap_in time: {st.elapsed_time(et)} ms')
         if blocks_to_swap_out.numel() > 0:
+            # st = torch.cuda.Event(enable_timing=True)
+            # st.record()
+            # et = torch.cuda.Event(enable_timing=True)
             self.cache_engine.swap_out(blocks_to_swap_out)
+            # et.record()
+            # torch.cuda.synchronize()
+            # print(f'swap_out time: {st.elapsed_time(et)} ms')
         if blocks_to_copy.numel() > 0:
             self.cache_engine.copy(blocks_to_copy)
     
