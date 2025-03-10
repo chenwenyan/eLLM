@@ -1277,7 +1277,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
   float scale,
   torch::Tensor& block_tables,  // [num_seqs, max_num_blocks_per_seq]
   torch::Tensor& seq_lens,      // [num_seqs]
-  int block_size, int max_seq_len,
+  int block_size, int max_seq_len,int num_threads,
   const c10::optional<torch::Tensor>& alibi_slopes,
   const std::string& kv_cache_dtype, float kv_scale){
   DISPATCH_BY_KV_CACHE_DTYPE(query.dtype(), kv_cache_dtype,

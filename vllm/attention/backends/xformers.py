@@ -626,6 +626,20 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
         last_value = last_value[:num_prefill_tokens]
         assert last_query.shape[0] == num_prefill_tokens
 
+        num_threads = 128
+        # 判断prefilling和decoding的比例, 按照1024为总大小，计算prefilling的num_threads和decoding的num_threads
+        if num_prefill_tokens is not None and num_decode_tokens is not None:
+            prefilling_num = num_prefill_tokens
+            decoding_num = num_decode_tokens
+            prefilling_num_threads = int(prefilling_num / (prefilling_num + decoding_num) * 1024)
+            # 让prefilling_num_threads为2的n次方
+            # num_threads = 1 << (prefilling_num_threads - 1).bit_length()
+            num_threads = prefilling_num_threads // 32 * 32
+            num_threads = min(512, 1024-num_threads)
+            print("prefilling_num is ", prefilling_num, "decoding_num is ", decoding_num, "num_threads is ", num_threads)
+
+
+
         last_output, output = PagedAttention.fused_forward(
             last_query, 
             last_key, 
@@ -637,6 +651,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
             decode_meta.block_tables,
             decode_meta.seq_lens_tensor,
             decode_meta.max_decode_seq_len,
+            num_threads,
             self.kv_cache_dtype,
             self.num_kv_heads,
             self.scale,

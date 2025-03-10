@@ -76,14 +76,12 @@ def fused_paged_attention_v1(
     seq_lens: torch.Tensor,
     block_size: int,
     max_seq_len: int,
+    num_threads: int,
     alibi_slopes: Optional[torch.Tensor],
     kv_cache_dtype: str,
     kv_scale: float,
 ) -> None:
-    vllm_ops.fused_paged_attention_v1(last_out, last_query, out, query, key_cache, value_cache,
-                                num_kv_heads, scale, block_tables, seq_lens,
-                                block_size, max_seq_len, alibi_slopes,
-                                kv_cache_dtype, kv_scale)
+    vllm_ops.fused_paged_attention_v1(last_out, last_query, out, query, key_cache,    value_cache, num_kv_heads, scale, block_tables, seq_lens, block_size, max_seq_len, num_threads, alibi_slopes, kv_cache_dtype, kv_scale)
 
 def paged_attention_v1_with_dynamic_kv(
     out: torch.Tensor,
@@ -106,51 +104,12 @@ def paged_attention_v1_with_dynamic_kv(
     attn_scores = torch.matmul(query, key.transpose(-2, -1)) / (head_size ** 0.5)
     mask = seq_lens.view(-1, 1, 1).expand_as(attn_scores) < max_seq_len
     attn_scores = attn_scores.masked_fill(~mask, float('-inf'))
-
-    # # print(f'attn_scores.shape is: {attn_scores.shape}')
-    # # attn_scores.shape is: torch.Size([96, 32, 32])
-    # print(f'seq_lens.shape is: {seq_lens.shape}, max_seq_len is: {max_seq_len}')
-    # # seq_lens.shape is: torch.Size([120]), max_seq_len is: 2048
-    # attn_scores = torch.bmm(query, key.transpose(-2, -1)) / (head_size ** 0.5)
-    # causal_mask =  torch.triu(seq_lens.view(-1, 1, 1).expand_as(attn_scores), diagonal=1).bool()
-    # attn_scores = attn_scores.masked_fill(causal_mask, float('-inf'))
     
-
-    # print(f'alibi_slopes is: {alibi_slopes}')
-    # alibi_slopes 一种用于注意力分数偏置的方法,形状为 (nheads,) 或 (batch_size, nheads),数据类型为 fp32。例如,如果 nheads 为 4,则 alibi_slopes 可以是形状为 (4,) 的张量
     if alibi_slopes is not None:
         attn_scores += alibi_slopes.unsqueeze(1).unsqueeze(1)
     attn_weights = nn.functional.softmax(attn_scores, dim=-1)
     output = torch.matmul(attn_weights, value)
     out.copy_(output.view(num_seqs, -1, head_size))
-
-    # print(f'output: {output.shape}, out: {out.shape}')
-    # output = output.view(num_seqs, num_heads, head_size)
-    # out.copy_(output)
-
-    # out.to('cpu')
-    # print(f'out: {out.shape}')
-    # print(f'out: {out[0, :2, :3]}')
-    # out.to(query.device)
-
-    # The second method
-    # src_len = key.shape[1]
-    # attn_scores = torch.bmm(query, key.transpose(1, 2))
-    # attention_mask = seq_lens.view(-1, 1, 1).expand_as(attn_scores) < max_seq_len
-    # attn_weights = attn_scores / (head_size ** 0.5)
-    # attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device))
-    # attn_weights = attn_weights.view(num_seqs * num_heads, max_seq_len, src_len)
-    # attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-    # attn_weights = attn_weights.view(num_seqs, num_heads, max_seq_len, src_len)
-    # attn_output = torch.bmm(attn_weights, value)
-    # # attn_weights = attn_weights.masked_fill(attention_mask, 0.0)
-    # attn_output = attn_output.view(num_seqs, num_heads, max_seq_len, head_size)
-    # attn_output = attn_output.transpose(1, 2)
-    # hidden_size = num_heads * head_size
-    # attn_output = attn_output.reshape(num_seqs, max_seq_len, hidden_size)
-    # out_proj = nn.Linear(hidden_size, hidden_size, bias=True)
-    # out = out_proj(attn_output)
-    # out.copy_(out.view(num_seqs, -1, head_size))
 
 
 def paged_attention_v2(

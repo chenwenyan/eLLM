@@ -673,7 +673,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
    assert(NUM_THREADS % THREAD_GROUP_SIZE == 0);
    constexpr int NUM_TOKENS_PER_THREAD_GROUP =
        DIVIDE_ROUND_UP(BLOCK_SIZE, WARP_SIZE);
-   constexpr int NUM_WARPS = NUM_THREADS / WARP_SIZE;
+   constexpr int NUM_WARPS = MAX(NUM_THREADS / WARP_SIZE, 1);
    const int thread_idx = threadIdx.x;
    const int warp_idx = thread_idx / WARP_SIZE;
    const int lane = thread_idx % WARP_SIZE;
@@ -1163,105 +1163,157 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
          alibi_slopes_ptr, q_stride, kv_block_stride, kv_head_stride,      \
          kv_scale);
 
-// TODO(woosuk): Tune NUM_THREADS.
-  template <typename T, typename CACHE_T, int BLOCK_SIZE,
-  vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 128>
-  void fused_paged_attention_v1_launcher(
-    torch::Tensor& last_out, torch::Tensor& last_q,
-    torch::Tensor& out, torch::Tensor& query, torch::Tensor& key_cache,
-    torch::Tensor& value_cache, int num_kv_heads, float scale,
-    torch::Tensor& block_tables, torch::Tensor& seq_lens, int max_seq_len,
-    const c10::optional<torch::Tensor>& alibi_slopes, float kv_scale) {
-    int num_seqs = query.size(0);
-    int num_heads = query.size(1);
-    int head_size = query.size(2);
-    int max_num_blocks_per_seq = block_tables.size(1);
-    int q_stride = query.stride(0);
-    int kv_block_stride = key_cache.stride(0);
-    int kv_head_stride = key_cache.stride(1);
 
-    int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
-    assert(head_size % thread_group_size == 0);
+  // TODO(woosuk): Tune NUM_THREADS.
+ template <typename T, typename CACHE_T, int BLOCK_SIZE,
+ vllm::Fp8KVCacheDataType KV_DTYPE, int NUM_THREADS = 128>
+ void fused_paged_attention_v1_launcher(
+   torch::Tensor& last_out, torch::Tensor& last_q,
+   torch::Tensor& out, torch::Tensor& query, torch::Tensor& key_cache,
+   torch::Tensor& value_cache, int num_kv_heads, float scale,
+   torch::Tensor& block_tables, torch::Tensor& seq_lens, int max_seq_len,
+   const c10::optional<torch::Tensor>& alibi_slopes, float kv_scale) {
+   int num_seqs = query.size(0);
+   int num_heads = query.size(1);
+   int head_size = query.size(2);
+   int max_num_blocks_per_seq = block_tables.size(1);
+   int q_stride = query.stride(0);
+   int kv_block_stride = key_cache.stride(0);
+   int kv_head_stride = key_cache.stride(1);
+ 
+   int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
+   assert(head_size % thread_group_size == 0);
+ 
+   // NOTE: alibi_slopes is optional.
+   const float* alibi_slopes_ptr =
+   alibi_slopes
+   ? reinterpret_cast<const float*>(alibi_slopes.value().data_ptr())
+   : nullptr;
+ 
+   T* last_out_ptr = reinterpret_cast<T*>(last_out.data_ptr());
+   T* last_q_ptr = reinterpret_cast<T*>(last_q.data_ptr());
+   T* out_ptr = reinterpret_cast<T*>(out.data_ptr());
+   T* query_ptr = reinterpret_cast<T*>(query.data_ptr());
+   CACHE_T* key_cache_ptr = reinterpret_cast<CACHE_T*>(key_cache.data_ptr());
+   CACHE_T* value_cache_ptr = reinterpret_cast<CACHE_T*>(value_cache.data_ptr());
+   int* block_tables_ptr = block_tables.data_ptr<int>();
+   int* seq_lens_ptr = seq_lens.data_ptr<int>();
+ 
+   constexpr int NUM_WARPS = NUM_THREADS / WARP_SIZE;
+   int padded_max_seq_len =
+   DIVIDE_ROUND_UP(max_seq_len, BLOCK_SIZE) * BLOCK_SIZE;
+   int logits_size = padded_max_seq_len * sizeof(float);
+   int outputs_size = (NUM_WARPS / 2) * head_size * sizeof(float);
+   // Python-side check in vllm.worker.worker._check_if_can_support_max_seq_len
+   // Keep that in sync with the logic here!
+   int shared_mem_size = std::max(logits_size, outputs_size);
+ 
+   dim3 grid(num_heads, num_seqs, 1);
+   dim3 block(NUM_THREADS);
+   const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
+   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+   switch (head_size) {
+   // NOTE(woosuk): To reduce the compilation time, we only compile for the
+   // head sizes that we use in the model. However, we can easily extend this
+   // to support any head size which is a multiple of 16.
+   case 64:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(64);
+   break;
+   case 80:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(80);
+   break;
+   case 96:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(96);
+   break;
+   case 112:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(112);
+   break;
+   case 128:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(128);
+   break;
+   case 256:
+   LAUNCH_FUSED_PAGED_ATTENTION_V1(256);
+   break;
+   default:
+   TORCH_CHECK(false, "Unsupported head size: ", head_size);
+   break;
+   }
+ }
 
-    // NOTE: alibi_slopes is optional.
-    const float* alibi_slopes_ptr =
-    alibi_slopes
-    ? reinterpret_cast<const float*>(alibi_slopes.value().data_ptr())
-    : nullptr;
-    T* last_out_ptr = reinterpret_cast<T*>(last_out.data_ptr());
-    T* last_q_ptr = reinterpret_cast<T*>(last_q.data_ptr());
-    T* out_ptr = reinterpret_cast<T*>(out.data_ptr());
-    T* query_ptr = reinterpret_cast<T*>(query.data_ptr());
-    CACHE_T* key_cache_ptr = reinterpret_cast<CACHE_T*>(key_cache.data_ptr());
-    CACHE_T* value_cache_ptr = reinterpret_cast<CACHE_T*>(value_cache.data_ptr());
-    int* block_tables_ptr = block_tables.data_ptr<int>();
-    int* seq_lens_ptr = seq_lens.data_ptr<int>();
 
-    constexpr int NUM_WARPS = NUM_THREADS / WARP_SIZE;
-    int padded_max_seq_len =
-    DIVIDE_ROUND_UP(max_seq_len, BLOCK_SIZE) * BLOCK_SIZE;
-    int logits_size = padded_max_seq_len * sizeof(float);
-    int outputs_size = (NUM_WARPS / 2) * head_size * sizeof(float);
-    // Python-side check in vllm.worker.worker._check_if_can_support_max_seq_len
-    // Keep that in sync with the logic here!
-    int shared_mem_size = std::max(logits_size, outputs_size);
-
-    dim3 grid(num_heads, num_seqs, 1);
-    dim3 block(NUM_THREADS);
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
-    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    switch (head_size) {
-    // NOTE(woosuk): To reduce the compilation time, we only compile for the
-    // head sizes that we use in the model. However, we can easily extend this
-    // to support any head size which is a multiple of 16.
-    case 64:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(64);
-    break;
-    case 80:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(80);
-    break;
-    case 96:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(96);
-    break;
-    case 112:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(112);
-    break;
-    case 128:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(128);
-    break;
-    case 256:
-    LAUNCH_FUSED_PAGED_ATTENTION_V1(256);
-    break;
-    default:
-    TORCH_CHECK(false, "Unsupported head size: ", head_size);
-    break;
-    }
-  }
-
-
- #define CALL_FUSED_V1_LAUNCHER(T, CACHE_T, BLOCK_SIZE, KV_DTYPE)                   \
-   fused_paged_attention_v1_launcher<T, CACHE_T, BLOCK_SIZE, KV_DTYPE>(             \
+ #define CALL_FUSED_V1_LAUNCHER(T, CACHE_T, BLOCK_SIZE, KV_DTYPE, NUM_THREADS)                   \
+   fused_paged_attention_v1_launcher<T, CACHE_T, BLOCK_SIZE, KV_DTYPE, NUM_THREADS>(             \
      last_out, last_q, out, query, key_cache, value_cache, num_kv_heads, scale, block_tables, \
      seq_lens, max_seq_len, alibi_slopes, kv_scale);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
- #define CALL_FUSED_V1_LAUNCHER_BLOCK_SIZE(T, CACHE_T, KV_DTYPE)  \
-    switch (block_size) {                                           \
-      case 8:                                                       \
-        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 8, KV_DTYPE);            \
-        break;                                                      \
-      case 16:                                                      \
-        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE);           \
-        break;                                                      \
-      case 32:                                                      \
-        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 32, KV_DTYPE);           \
-        break;                                                      \
-      default:                                                      \
-        TORCH_CHECK(false, "Unsupported block size: ", block_size); \
-        break;                                                      \
+ #define CALL_FUSED_V1_LAUNCHER_NUM_THREADS(T, CACHE_T, KV_DTYPE) \
+    switch (num_threads) {                                                      \
+      case 16:                                                                  \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 16);                   \
+        break;                                                                  \
+      case 32:                                                                  \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 32);                   \
+        break;                                                                  \
+      case 64:                                                                  \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 64);                   \
+        break;                                                                  \
+      case 96:                                                                  \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 96);                   \
+        break;                                                                  \
+      case 128:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 128);                  \
+        break;                                                                  \
+      case 256:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 256);                  \
+        break;                                                                  \
+      case 288:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 288);                  \
+        break;                                                                  \
+      case 384:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 384);                  \
+        break;                                                                  \
+      case 448:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 448);                  \
+        break;                                                                  \
+      case 512:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 512);                  \
+        break;                                                                  \
+      case 544:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 544);                  \
+        break;                                                                  \
+      case 576:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 576);                  \
+        break;                                                                  \
+      case 640:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 640);                  \
+        break;                                                                  \
+      case 704:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 704);                  \
+        break;                                                                  \
+      case 768:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 768);                  \
+        break;                                                                  \
+      case 832:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 832);                  \
+        break;                                                                  \
+      case 896:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 896);                  \
+        break;                                                                  \
+      case 928:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 928);                  \
+        break;                                                                  \
+      case 960:                                                                 \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 960);                  \
+        break;                                                                  \
+      case 1024:                                                                \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 1024);                 \
+        break;                                                                  \
+      default:                                                                  \
+        CALL_FUSED_V1_LAUNCHER(T, CACHE_T, 16, KV_DTYPE, 128);                  \
+        break;                                                                  \
     }
-
 
  void fused_paged_attention_v1(
   torch::Tensor& last_out,           // [num_seqs, num_heads, head_size]
@@ -1276,11 +1328,11 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
   float scale,
   torch::Tensor& block_tables,  // [num_seqs, max_num_blocks_per_seq]
   torch::Tensor& seq_lens,      // [num_seqs]
-  int block_size, int max_seq_len,
+  int block_size, int max_seq_len, int num_threads,
   const c10::optional<torch::Tensor>& alibi_slopes,
   const std::string& kv_cache_dtype, float kv_scale){
   DISPATCH_BY_KV_CACHE_DTYPE(query.dtype(), kv_cache_dtype,
-                            CALL_FUSED_V1_LAUNCHER_BLOCK_SIZE)
+                            CALL_FUSED_V1_LAUNCHER_NUM_THREADS);                   
   }
 
 
@@ -1363,7 +1415,7 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
        break;
      case 256:
        LAUNCH_PAGED_ATTENTION_V1(256);
-       break;
+       break;  
      default:
        TORCH_CHECK(false, "Unsupported head size: ", head_size);
        break;
@@ -1477,30 +1529,30 @@ void mlp(float* input, float* output, float* weights1, float* biases1, float* we
    const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
    switch (head_size) {
-     // NOTE(woosuk): To reduce the compilation time, we only compile for the
-     // head sizes that we use in the model. However, we can easily extend this
-     // to support any head size which is a multiple of 16.
-     case 64:
-       LAUNCH_PAGED_ATTENTION_V2(64);
-       break;
-     case 80:
-       LAUNCH_PAGED_ATTENTION_V2(80);
-       break;
-     case 96:
-       LAUNCH_PAGED_ATTENTION_V2(96);
-       break;
-     case 112:
-       LAUNCH_PAGED_ATTENTION_V2(112);
-       break;
-     case 128:
-       LAUNCH_PAGED_ATTENTION_V2(128);
-       break;
-     case 256:
-       LAUNCH_PAGED_ATTENTION_V2(256);
-       break;
-     default:
-       TORCH_CHECK(false, "Unsupported head size: ", head_size);
-       break;
+   // NOTE(woosuk): To reduce the compilation time, we only compile for the
+   // head sizes that we use in the model. However, we can easily extend this
+   // to support any head size which is a multiple of 16.
+   case 64:
+   LAUNCH_PAGED_ATTENTION_V2(64);
+   break;
+   case 80:
+   LAUNCH_PAGED_ATTENTION_V2(80);
+   break;
+   case 96:
+   LAUNCH_PAGED_ATTENTION_V2(96);
+   break;
+   case 112:
+   LAUNCH_PAGED_ATTENTION_V2(112);
+   break;
+   case 128:
+   LAUNCH_PAGED_ATTENTION_V2(128);
+   break;
+   case 256:
+   LAUNCH_PAGED_ATTENTION_V2(256);
+   break;
+   default:
+   TORCH_CHECK(false, "Unsupported head size: ", head_size);
+   break;
    }
  }
  

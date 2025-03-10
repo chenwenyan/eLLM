@@ -15,7 +15,7 @@ void fused_paged_attention_v1(torch::Tensor& last_out, torch::Tensor& last_query
                         torch::Tensor& key_cache, torch::Tensor& value_cache,
                         int num_kv_heads, float scale,
                         torch::Tensor& block_tables, torch::Tensor& seq_lens,
-                        int block_size, int max_seq_len,
+                        int block_size, int max_seq_len,int num_threads,
                         const c10::optional<torch::Tensor>& alibi_slopes,
                         const std::string& kv_cache_dtype, float kv_scale);
 
