@@ -15,7 +15,7 @@ export VLLM_LOGGING_LEVEL=DEBUG
 # pgrep -f 'api_server' | xargs kill -9
 
 preemption_mode=swap # 1: swap 2: recomputation
-gpu_id=2
+gpu_id=1,2
 gpu_memory_utilizations=(0.6)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 # store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
@@ -69,10 +69,10 @@ for seed in ${seeds[@]}; do
             for num_prompt in ${num_prompts[@]}; do
                 for store_cache_layers in ${store_cache_layerss[@]}; do
                     for wt_weight in ${wt_weights[@]}; do
-                        CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 2-3 python3 -m vllm.entrypoints.openai.api_server \
+                        CUDA_VISIBLE_DEVICES=${gpu_id} RAY_DEDUP_LOGS=1 taskset -c 2-3 python3 -m vllm.entrypoints.openai.api_server \
                             --model ${model} \
                             --port 8081 \
-                            --tensor-parallel-size 1 \
+                            --tensor-parallel-size 2 \
                             --swap-space 4 \
                             --gpu-memory-utilization ${gpu_memory_utilization} \
                             --store-cache-layers ${store_cache_layers} \

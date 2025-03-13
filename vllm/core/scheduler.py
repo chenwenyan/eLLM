@@ -290,14 +290,14 @@ class Scheduler:
         if self.scheduler_config.embedding_mode:
             version = "embedding"
 
-        # print(f"Using block manager version: {version}")
+        # logger.info(f"Using block manager version: {version}")
         BlockSpaceManagerImpl = BlockSpaceManager.get_block_space_manager_class(
             version)
 
         # Create the block space manager.
         # set dynamic cache layer ratio by various request loads
         # set flatten layers by num_layers
-        print(f"self.cache_config.num_layers is {self.cache_config.num_layers}")
+        logger.info(f"self.cache_config.num_layers is {self.cache_config.num_layers}")
         self.block_manager = BlockSpaceManagerImpl(
             block_size=self.cache_config.block_size,
             num_gpu_blocks=self.cache_config.num_gpu_blocks,
@@ -512,10 +512,10 @@ class Scheduler:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
             total_block_ids.extend(_running_block_ids)
 
-        # print(f"total_block_ids length: {len(total_block_ids)}")
-        # print(f"num_blocks: {len(set(total_block_ids))}, token_num: {sum(self.request_lengths)}")  
+        # logger.info(f"total_block_ids length: {len(total_block_ids)}")
+        # logger.info(f"num_blocks: {len(set(total_block_ids))}, token_num: {sum(self.request_lengths)}")  
 
-        print(f"swapped_out_tokens: {swapped_out_tokens}")
+        logger.info(f"swapped_out_tokens: {swapped_out_tokens}")
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -633,7 +633,7 @@ class Scheduler:
             budget.add_num_seqs(seq_group.request_id, num_new_seqs)
 
         swapped_queue.extendleft(leftover_swapped)
-        print(f"swapped_in_tokens: {swapped_in_tokens}")
+        logger.info(f"swapped_in_tokens: {swapped_in_tokens}")
 
         return swapped_queue, SchedulerSwappedInOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -780,7 +780,7 @@ class Scheduler:
         total_block_ids:List[int] = []
         for seq_group in seq_groups:
             _running_block_ids = self.block_manager.get_seq_used_block_id(seq_group.seq_group)
-            # print(f"seq_group: {seq_group.seq_group.request_id}, _running_block_ids: {_running_block_ids}")
+            # logger.info(f"seq_group: {seq_group.seq_group.request_id}, _running_block_ids: {_running_block_ids}")
             total_block_ids.extend(_running_block_ids)
         return waiting_queue, SchedulerPrefillOutputs(
             seq_groups=seq_groups,
@@ -806,7 +806,12 @@ class Scheduler:
             self.cache_layers_arr = [20]
         else:
             if not self.batch_sizes_arr or not self.cache_layers_arr:
-                self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers_2()
+                try:
+                    self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers_2()
+                except Exception as e:
+                    logger.info(f"Exception: {e}")
+                    self.batch_sizes_arr = [1]
+                    self.cache_layers_arr = [20]
  
         
         #把batch_sizes, cache_layers转成一个队列
@@ -822,7 +827,7 @@ class Scheduler:
         max_num_seqs = self.batch_sizes_arr.popleft()
         self.cache_layers = self.cache_layers_arr.popleft()
 
-        print(f"max_num_seqs: {max_num_seqs}")
+        logger.info(f"max_num_seqs: {max_num_seqs}")
         budget = SchedulingBudget(
             token_budget=self.scheduler_config.max_num_batched_tokens,
             max_num_seqs=max_num_seqs,
@@ -1127,9 +1132,9 @@ class Scheduler:
         final_l = np.maximum(final_l, 4 * np.ones(self.I)) // 4 * 4
 
         et = time.time()
-        print("Time elapsed:", (et - st)*1000, "ms")   
-        print("Optimal batch sizes:", final_b)
-        print("Optimal cache layers:", final_l.astype(int))
+        logger.info(f"Time elapsed:{(et - st)*1000}ms")   
+        logger.info(f"Optimal batch sizes: {final_b}")
+        logger.info(f"Optimal cache layers: {final_l.astype(int)}")
         return final_b, final_l.astype(int)
 
 
@@ -1228,9 +1233,9 @@ class Scheduler:
         final_l = np.maximum(final_l, 4 * np.ones(self.I)) // 4 * 4
 
         et = time.time()
-        print("Time elapsed:", (et - st)*1000, "ms")   
-        print("Optimal batch sizes:", final_b)
-        print("Optimal cache layers:", final_l.astype(int))
+        logger.info("Time elapsed:", (et - st)*1000, "ms")   
+        logger.info("Optimal batch sizes:", final_b)
+        logger.info("Optimal cache layers:", final_l.astype(int))
         return final_b, final_l.astype(int)
     
     def get_opt_bs_and_layers_2(self):
@@ -1318,15 +1323,15 @@ class Scheduler:
         )
 
         et = time.time()
-        print("Time:", (et - st)*1000, "ms")
+        logger.info(f"Time: {(et - st)*1000} ms")
         # 输出结果
         b_opt, l_opt = solution.x
         final_l = np.round(l_opt).astype(int)
         final_l = np.maximum(final_l, 4 * np.ones(1)) // 4 * 4
         final_b = int(b_opt)
-        print(f"Optimal b: {final_b}")
-        print(f"Optimal l: {final_l}")
-        print(f"Objective value: {solution.fun}")
+        logger.info(f"Optimal b: {final_b}")
+        logger.info(f"Optimal l: {final_l}")
+        logger.info(f"Objective value: {solution.fun}")
         return [int(final_b)], [final_l]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
@@ -1376,7 +1381,7 @@ class Scheduler:
 
             # It assumes the scheduled_seq_groups is ordered by
             # prefill < decoding.
-            # print(f'scheduler->seq_group.cache_layers is {self.cache_layers}')
+            # logger.info(f'scheduler->seq_group.cache_layers is {self.cache_layers}')
             is_prompt = seq_group.is_prefill()
             seq_group_metadata = SequenceGroupMetadata(
                 request_id=seq_group.request_id,
@@ -1400,7 +1405,7 @@ class Scheduler:
             )
             seq_group.update_cache_layers(self.cache_layers)
             seq_group_metadata.update_cache_layers(self.cache_layers)
-            # print(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
+            # logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
 
         # Now that the batch has been created, we can assume all blocks in the
@@ -1540,52 +1545,52 @@ class Scheduler:
         blocks_to_swap_in: List[Tuple[int, int]],
         total_block_ids: List[int],
     ) -> None:
-        st_record = torch.cuda.Event(enable_timing=True)
-        en_record = torch.cuda.Event(enable_timing=True)
-        st_record.record()
+        # st_record = torch.cuda.Event(enable_timing=True)
+        # en_record = torch.cuda.Event(enable_timing=True)
+        # st_record.record()
         mapping = self.block_manager.swap_in(seq_group)
         blocks_to_swap_in.extend(mapping)
         total_block_ids.extend([block_id for _, block_id in mapping])
         for seq in seq_group.get_seqs(status=SequenceStatus.SWAPPED):
             seq.status = SequenceStatus.RUNNING
-        en_record.record()
-        torch.cuda.synchronize()
+        # en_record.record()
+        # torch.cuda.synchronize()
         tokens = np.sum([seq.get_len() for seq in seq_group.get_seqs()])
-        print(f"cpu to gpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}") 
+        # logger.info(f"cpu to gpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}") 
 
     def _swap_out(
         self,
         seq_group: SequenceGroup,
         blocks_to_swap_out: List[Tuple[int, int]],
     ) -> None:
-        st_record = torch.cuda.Event(enable_timing=True)
-        en_record = torch.cuda.Event(enable_timing=True)
-        st_record.record()
+        # st_record = torch.cuda.Event(enable_timing=True)
+        # en_record = torch.cuda.Event(enable_timing=True)
+        # st_record.record()
         if not self.block_manager.can_swap_out(seq_group):
             # FIXME(woosuk): Abort the sequence group instead of aborting the
             # entire engine.
             raise RuntimeError(
                 "Aborted due to the lack of CPU swap space. Please increase "
                 "the swap space to avoid this error.")
-        # print(f"seq_group: {seq_group.request_id}, seq_group.get_seqs(status=SequenceStatus.RUNNING): {seq_group.get_seqs(status=SequenceStatus.RUNNING)}, seq_group.get_seqs(): {seq_group.get_seqs()}, seq_group.embeedings: {seq_group.embeddings}")
+        # logger.info(f"seq_group: {seq_group.request_id}, seq_group.get_seqs(status=SequenceStatus.RUNNING): {seq_group.get_seqs(status=SequenceStatus.RUNNING)}, seq_group.get_seqs(): {seq_group.get_seqs()}, seq_group.embeedings: {seq_group.embeddings}")
 
         mapping = self.block_manager.swap_out(seq_group)
-        print(f"mapping: {mapping}")
+        logger.info(f"mapping: {mapping}")
         blocks_to_swap_out.extend(mapping)
-        print(f"After mapping, blocks_to_swap_out: {blocks_to_swap_out}")
+        logger.info(f"After mapping, blocks_to_swap_out: {blocks_to_swap_out}")
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             seq.status = SequenceStatus.SWAPPED
-        en_record.record()
-        torch.cuda.synchronize()
+        # en_record.record()
+        # torch.cuda.synchronize()
         tokens = np.sum([seq.get_len() for seq in seq_group.get_seqs()])
-        print(f"gpu to cpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}")    
+        # logger.info(f"gpu to cpu: {st_record.elapsed_time(en_record)} ms, tokens: {tokens}")    
 
     def _passed_delay(self, now: float) -> bool:
         if self.prev_prompt:
             self.last_prompt_latency = now - self.prev_time
         self.prev_time, self.prev_prompt = now, False
         # Delay scheduling prompts to let waiting queue fill up
-        # print(f'delay_factor: {self.scheduler_config.delay_factor}, last_prompt_latency: {self.last_prompt_latency}')
+        # logger.info(f'delay_factor: {self.scheduler_config.delay_factor}, last_prompt_latency: {self.last_prompt_latency}')
         if self.scheduler_config.delay_factor > 0 and self.waiting:
             earliest_arrival_time = min(
                 [e.metrics.arrival_time for e in self.waiting])
@@ -1593,7 +1598,7 @@ class Scheduler:
                 (now - earliest_arrival_time) >
                 (self.scheduler_config.delay_factor * self.last_prompt_latency)
                 or not self.running)
-            # print(f'scheduler_config.delay_factor: {self.scheduler_config.delay_factor}, earliest_arrival_time: {earliest_arrival_time}, now: {now}, passed_delay: {passed_delay}')
+            # logger.info(f'scheduler_config.delay_factor: {self.scheduler_config.delay_factor}, earliest_arrival_time: {earliest_arrival_time}, now: {now}, passed_delay: {passed_delay}')
         else:
             passed_delay = True
         return passed_delay

@@ -159,7 +159,7 @@ class XFormersMetadata(AttentionMetadata, PagedAttentionMetadata):
             return None
 
         if self._cached_decode_metadata is not None:
-            # print(f'cached_decode_metadata-self.seq_lens is {self.seq_lens}')
+            # logger.info(f'cached_decode_metadata-self.seq_lens is {self.seq_lens}')
             self._cached_decode_metadata.seq_lens = self.seq_lens
             return self._cached_decode_metadata
         assert self.block_tables is not None
@@ -265,13 +265,13 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         query = query.view(-1, self.num_heads, self.head_size)
         key = key.view(-1, self.num_kv_heads, self.head_size)
         value = value.view(-1, self.num_kv_heads, self.head_size)
-        # print(f"input query is {query.shape}, key is {key.shape}, value is {value.shape}")
+        # logger.info(f"input query is {query.shape}, key is {key.shape}, value is {value.shape}")
         if kv_cache is not None:
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
             
-            # print(f'key_cache is {key_cache.shape}, value_cache is {value_cache.shape}')
-            # print(f'key is {key.shape}, value is {value.shape}')
+            # logger.info(f'key_cache is {key_cache.shape}, value_cache is {value_cache.shape}')
+            # logger.info(f'key is {key.shape}, value is {value.shape}')
 
             # Reshape the input keys and values and store them in the cache.
             # If kv_cache is not provided, the new key and value tensors are
@@ -291,7 +291,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
         try:
             output = torch.empty_like(query)
         except RuntimeError as e:
-            print(f"e is {e}")
+            logger.info(f"e is {e}")
             raise e
         # Query for decode. KV is not needed because it is already cached.
         # decode_query = query[num_prefill_tokens:]
@@ -310,17 +310,17 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             assert query.shape[0] == num_prefill_tokens
             
             # Prompt run.
-            st_prefill = torch.cuda.Event(enable_timing=True)
-            et_prefill = torch.cuda.Event(enable_timing=True)
-            st_prefill.record()
+            # st_prefill = torch.cuda.Event(enable_timing=True)
+            # et_prefill = torch.cuda.Event(enable_timing=True)
+            # st_prefill.record()
             if kv_cache is None or prefill_meta.block_tables.numel() == 0:
                 # normal attention.
                 # block tables are empty if the prompt does not have a cached
                 # prefix.
-                # print('prompt: normal attention, query is ', query.shape, 'key is ', key.shape, 'value is ', value.shape)
+                # logger.info('prompt: normal attention, query is ', query.shape, 'key is ', key.shape, 'value is ', value.shape)
                 out = self._run_memory_efficient_xformers_forward(
                     query, key, value, prefill_meta)
-                # print(f'out.shape is {out.shape}, output.shape is {output.shape}, output[:num_prefill_tokens].shape is {output[:num_prefill_tokens].shape}')
+                # logger.info(f'out.shape is {out.shape}, output.shape is {output.shape}, output[:num_prefill_tokens].shape is {output[:num_prefill_tokens].shape}')
                 assert out.shape == output[:num_prefill_tokens].shape
                 output[:num_prefill_tokens] = out
             else:
@@ -344,9 +344,9 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 )
                 assert output[:num_prefill_tokens].shape == out.shape
                 output[:num_prefill_tokens] = out
-            et_prefill.record()
-            torch.cuda.synchronize()
-            # print(f"prefill_time is {st_prefill.elapsed_time(et_prefill)} ms, prefill_meta.num_prefill_tokens is {prefill_meta.num_prefill_tokens}")
+            # et_prefill.record()
+            # torch.cuda.synchronize()
+            # logger.info(f"prefill_time is {st_prefill.elapsed_time(et_prefill)} ms, prefill_meta.num_prefill_tokens is {prefill_meta.num_prefill_tokens}")
 
         
         if decode_meta := attn_metadata.decode_metadata:
@@ -375,7 +375,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 # )
                 # recomputing_et.record()
                 # torch.cuda.synchronize()
-                # print(f"recomputing_time is {recomputing_st.elapsed_time(recomputing_et)} ms, tokens is {num_prefill_tokens}, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
+                # logger.info(f"recomputing_time is {recomputing_st.elapsed_time(recomputing_et)} ms, tokens is {num_prefill_tokens}, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
 
             else:
                 # decode_st = torch.cuda.Event(enable_timing=True)
@@ -396,7 +396,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 )
                 # decode_et.record()
                 # torch.cuda.synchronize()
-                # print(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
+                # logger.info(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
         return output.view(-1, self.num_heads * self.head_size)
 
     def _run_memory_efficient_xformers_forward(
@@ -441,17 +441,17 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             if self.alibi_slopes is None:
                 attn_bias = BlockDiagonalCausalMask.from_seqlens(
                     attn_metadata.seq_lens)
-                # print(f'BlockDiagonalCausalMask.from_seqlens attn_bias is {attn_bias}')
+                # logger.info(f'BlockDiagonalCausalMask.from_seqlens attn_bias is {attn_bias}')
                 if self.sliding_window is not None:
                     attn_bias = attn_bias.make_local_attention(
                         self.sliding_window)
                 attn_metadata.attn_bias = [attn_bias]
-                # print(f'attn_metadata.attn_bias is {attn_metadata.attn_bias}')
+                # logger.info(f'attn_metadata.attn_bias is {attn_metadata.attn_bias}')
             else:
                 attn_metadata.attn_bias = _make_alibi_bias(
                     self.alibi_slopes, self.num_kv_heads, query.dtype,
                     attn_metadata.seq_lens)
-            # print(f'After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
+            # logger.info(f'After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
 
         # No alibi slopes.
         # TODO(woosuk): Too many view operations. Let's try to reduce
@@ -462,7 +462,7 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
             
-            # print(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
+            # logger.info(f'Normal_shape: query is {query.shape}, key is {key.shape}, value is {value.shape}')
             out = xops.memory_efficient_attention_forward(
                 query,
                 key,
@@ -572,7 +572,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
         Returns:
             shape = [num_tokens, num_heads * head_size]
         """
-        # print(f"last_query is {last_query.shape}, last_key is {last_key.shape}, last_value is {last_value.shape}, query is {query.shape}, key is {key.shape}, value is {value.shape}")
+        # logger.info(f"last_query is {last_query.shape}, last_key is {last_key.shape}, last_value is {last_value.shape}, query is {query.shape}, key is {key.shape}, value is {value.shape}")
         last_query = last_query.view(-1, self.num_heads, self.head_size)
         last_key = last_key.view(-1, self.num_kv_heads, self.head_size)
         last_value = last_value.view(-1, self.num_kv_heads, self.head_size)
@@ -589,13 +589,13 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
             
-            # print(f'key_cache is {key_cache.shape}, value_cache is {value_cache.shape}')
-            # print(f'key is {key.shape}, value is {value.shape}')
+            # logger.info(f'key_cache is {key_cache.shape}, value_cache is {value_cache.shape}')
+            # logger.info(f'key is {key.shape}, value is {value.shape}')
 
             # Reshape the input keys and values and store them in the cache.
             # If kv_cache is not provided, the new key and value tensors are
             # not cached. This happens during the initial memory profiling run.
-            print(f"running fused_write_to_paged_cache")
+            logger.info(f"running fused_write_to_paged_cache")
             PagedAttention.fused_write_to_paged_cache(last_key, last_value, key, value, key_cache,
                                                 value_cache,
                                                 attn_metadata.slot_mapping,
@@ -609,7 +609,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
         try:
             output = torch.empty_like(query)
         except RuntimeError as e:
-            print(f"e is {e}")
+            logger.info(f"e is {e}")
             raise e
         # Query for decode. KV is not needed because it is already cached.
         
@@ -628,16 +628,18 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
 
         num_threads = 128
         # 判断prefilling和decoding的比例, 按照1024为总大小，计算prefilling的num_threads和decoding的num_threads
-        if num_prefill_tokens is not None and num_decode_tokens is not None:
-            prefilling_num = num_prefill_tokens
-            decoding_num = num_decode_tokens
-            prefilling_num_threads = int(prefilling_num / (prefilling_num + decoding_num) * 1024)
-            # 让prefilling_num_threads为2的n次方
-            # num_threads = 1 << (prefilling_num_threads - 1).bit_length()
-            num_threads = prefilling_num_threads // 32 * 32
-            num_threads = min(512, 1024-num_threads)
-            print("prefilling_num is ", prefilling_num, "decoding_num is ", decoding_num, "num_threads is ", num_threads)
-
+        # if num_prefill_tokens is not None and num_decode_tokens is not None:
+        #     prefilling_num = num_prefill_tokens
+        #     decoding_num = num_decode_tokens
+        #     prefilling_num_threads = int(prefilling_num / (prefilling_num + decoding_num) * 1024)
+        #     # 让prefilling_num_threads为2的n次方
+        #     # num_threads = 1 << (prefilling_num_threads - 1).bit_length()
+        #     num_threads = prefilling_num_threads // 32 * 32
+        #     logger.info(f'original num_threads is {num_threads}')
+        #     # num_threads = min(512, 1024-num_threads)
+        #     # num_threads = max(128, num_threads)
+        #     num_threads = 128
+        #     logger.info("prefilling_num is ", prefilling_num, "decoding_num is ", decoding_num, "num_threads is ", num_threads)
 
 
         last_output, output = PagedAttention.fused_forward(
@@ -658,7 +660,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
             self.alibi_slopes,
             kv_scale,
         )
-        # print(f'last_output.shape is {last_output.shape}, output.shape is {output.shape}')
+        # logger.info(f'last_output.shape is {last_output.shape}, output.shape is {output.shape}')
 
         return last_output.view(-1, self.num_heads * self.head_size), output.view(-1, self.num_heads * self.head_size)    
 
@@ -670,7 +672,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
             attn_metadata: XFormersMetadata,
         ) -> torch.Tensor:
 
-        print(f'attn_metadata is {attn_metadata}')
+        logger.info(f'attn_metadata is {attn_metadata}')
         original_query = query
 
         if self.num_kv_heads != self.num_heads:
@@ -694,17 +696,17 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
                 attn_metadata.seq_lens = [int(i*4) for i in attn_metadata.seq_lens]
                 attn_bias = BlockDiagonalCausalMask.from_seqlens(attn_metadata.seq_lens)
                 
-                print(f'Decode:AttentionBias.from_seqlens attn_bias is {attn_bias}')
+                logger.info(f'Decode:AttentionBias.from_seqlens attn_bias is {attn_bias}')
                 if self.sliding_window is not None:
                     attn_bias = attn_bias.make_local_attention(
                         self.sliding_window)
                 attn_metadata.attn_bias = [attn_bias]
-                print(f'Decode:attn_metadata.attn_bias is {attn_metadata.attn_bias}')
+                logger.info(f'Decode:attn_metadata.attn_bias is {attn_metadata.attn_bias}')
             else:
                 attn_metadata.attn_bias = _make_alibi_bias(
                     self.alibi_slopes, self.num_kv_heads, query.dtype,
                     attn_metadata.seq_lens)
-            print(f'Decode:After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
+            logger.info(f'Decode:After attn_metadata.attn_bias is {attn_metadata.attn_bias}')    
 
         # No alibi slopes.
         # TODO(woosuk): Too many view operations. Let's try to reduce
@@ -723,7 +725,7 @@ class HFusedXFormersImpl(HFusedAttentionImpl[XFormersMetadata]):
                 attn_bias=attn_metadata.attn_bias[0],
                 p=0.0,
                 scale=self.scale)
-            print(f'Decode:out.shape is {out.shape}')
+            logger.info(f'Decode:out.shape is {out.shape}')
 
             return out.view_as(original_query)
 

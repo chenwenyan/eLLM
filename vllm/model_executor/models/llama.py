@@ -48,11 +48,11 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import SamplerOutput
 from vllm.utils import is_hip, print_warning_once
-
+from vllm.logger import init_logger
 from vllm import _custom_ops as ops
 
 import itertools
-
+logger = init_logger(__name__)
 
 class LlamaMLP(nn.Module):
 
@@ -117,9 +117,9 @@ class HFusedLlamaMLP(nn.Module):
         weight = torch.empty(x.shape[-1], x.shape[-1], dtype=torch.float16, device=x.device)
         bias = torch.empty(x.shape[-1], dtype=torch.float16, device=x.device)
 
-        # print("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
+        # logger.info("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
         ops.hfused_mlp(last_out, out, last_x, x, weight, bias) 
-        # print("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
+        # logger.info("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
         # torch.cuda.synchronize()
         return last_out, out
     
@@ -220,17 +220,17 @@ class LlamaAttention(nn.Module):
             last_qkv, _ = self.qkv_proj(last_hidden_states)
             last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
             last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
-            # print(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
+            # logger.info(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
         
             qkv, _ = self.qkv_proj(hidden_states)
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
             q, k = self.rotary_emb(positions, q, k)
-            # print(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
+            # logger.info(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
 
             # attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
             # fused attention 
             last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
-            # print(f'last_attn_output: {last_attn_output.shape}, attn_output: {attn_output.shape}')
+            # logger.info(f'last_attn_output: {last_attn_output.shape}, attn_output: {attn_output.shape}')
             last_output, _ = self.o_proj(last_attn_output)
             output, _ = self.o_proj(attn_output)
             
@@ -410,7 +410,7 @@ class LlamaModel(nn.Module):
             for _ in range(config.num_hidden_layers)
         ])
 
-        print(f'config.num_hidden_layers: {config.num_hidden_layers}')
+        logger.info(f'config.num_hidden_layers: {config.num_hidden_layers}')
 
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.cache_config = cache_config
@@ -447,9 +447,9 @@ class LlamaModel(nn.Module):
         return communication_cost 
 
     def get_best_layer(self, request_lens, attn_metadata):
-        st = torch.cuda.Event(enable_timing=True)
-        et = torch.cuda.Event(enable_timing=True)
-        st.record()
+        # st = torch.cuda.Event(enable_timing=True)
+        # et = torch.cuda.Event(enable_timing=True)
+        # st.record()
         # 所有可能的 recomputed layers 和 swapped layers 的组合
         layers = [1, 2]
         best_cost = float('inf')
@@ -473,12 +473,12 @@ class LlamaModel(nn.Module):
                 best_recomputed_layers = recomputed_layers
                 best_swapped_layers = swapped_layers
 
-        print(f"Best recomputed layers: {best_recomputed_layers}")
-        print(f"Best swapped layers: {best_swapped_layers}")
-        print(f"Best cost gap: {best_cost}")
-        et.record()
-        torch.cuda.synchronize()
-        print(f'get_best_layer time: {st.elapsed_time(et)} ms')
+        logger.info(f"Best recomputed layers: {best_recomputed_layers}")
+        logger.info(f"Best swapped layers: {best_swapped_layers}")
+        logger.info(f"Best cost gap: {best_cost}")
+        # et.record()
+        # torch.cuda.synchronize()
+        # logger.info(f'get_best_layer time: {st.elapsed_time(et)} ms')
         return best_recomputed_layers, best_swapped_layers
 
     def forward(
@@ -495,7 +495,7 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        print('kv_caches_length: ', len(kv_caches))
+        logger.info(f'kv_caches_length: {len(kv_caches)}')
         # 判断kv caches是否为空
         if attn_metadata.prefill_metadata is not None:
             self.last_attn_metadata = attn_metadata
@@ -539,7 +539,7 @@ class LlamaModel(nn.Module):
                         residual,
                     )  
                 else:
-                    # print(f'fused layer: {i}')
+                    # logger.info(f'fused layer: {i}')
                     if i in layer_indexs:
                         input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
                         if inputs_embeds is None:
@@ -553,6 +553,8 @@ class LlamaModel(nn.Module):
                     # st.record()
                     stream1 = torch.cuda.Stream()
                     stream2 = torch.cuda.Stream()
+                    # 创建一个同步事件（用于跨流协调）
+                    load_complete_event = torch.cuda.Event()
                     # 判断是否从cpu加载kv caches到gpu，如果加载时间慢，则直接用重新计算的方式
 
                     total_seq_len = sum([seq_data['attn_metadata'].total_seq_len for seq_data in seq_data_list])
@@ -560,21 +562,14 @@ class LlamaModel(nn.Module):
                     swapped_layers, recomputed_layers = self.get_best_layer(total_seq_len, attn_metadata)
                     with torch.cuda.stream(stream1):
                         # load kv caches from cpu to gpu
-                        print(f'load kv caches from cpu to gpu, layer: {i}')
-                        import time
-                        sleep_time = self.get_communication_cost(swapped_layers, attn_metadata)
-                        print(f'sleep_time: {sleep_time}')
-                        time.sleep(sleep_time)
-
-                    with torch.cuda.stream(stream1):
-                        # load kv caches from cpu to gpu
-                        print(f'load kv caches from cpu to gpu, layer: {i}')
-                        import time
-                        tokens = attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens
-                        sleep_time = (0.001085 * tokens + 0.1103)/1000
-                        print(f'tokens {tokens}, sleep_time: {sleep_time}')
-                        time.sleep(sleep_time)
-
+                        logger.info(f'load kv caches from cpu to gpu, layer: {i}')
+                        # import time
+                        # sleep_time = self.get_communication_cost(swapped_layers, attn_metadata)
+                        # logger.info(f'sleep_time: {sleep_time}')
+                        # time.sleep(sleep_time)
+                        # 记录事件：stream1完成加载
+                        load_complete_event.record(stream=stream1)
+                        
                     i += len(swapped_layers)
                     with torch.cuda.stream(stream2):    
                         last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
@@ -590,13 +585,18 @@ class LlamaModel(nn.Module):
                             self.last_attn_metadata,
                             self.last_residual,
                         )
+                    # 3. 在发起任何集体通信（如AllReduce）前，同步所有相关流
+                    # 同步stream2（计算流）
+                    stream2.synchronize()
+                    # 同步默认流（NCCL通信使用默认流）
+                    torch.cuda.current_stream().synchronize()
                     # et.record()
                     # torch.cuda.synchronize()
-                    # print(f'recomputing time: {st.elapsed_time(et)} ms, tokens: {attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens}')
+                    # logger.info(f'recomputing time: {st.elapsed_time(et)} ms, tokens: {attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens}')
 
                     self.last_hidden_states = last_hidden_states
                     self.last_residual = last_residual
-                    # print(f'after added, fused layer: {i}')
+                    # logger.info(f'after added, fused layer: {i}')
                     i += 2 # skip two layers
                     continue  # 跳过当前迭代，进入下一次迭代
                 i += 1
@@ -687,14 +687,14 @@ class LlamaForCausalLM(nn.Module):
         attn_metadata: AttentionMetadata,
         seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
-        st = torch.cuda.Event(enable_timing=True)
-        en = torch.cuda.Event(enable_timing=True)
-        st.record()
+        # st = torch.cuda.Event(enable_timing=True)
+        # en = torch.cuda.Event(enable_timing=True)
+        # st.record()
         hidden_states = self.model(input_ids, positions, kv_caches,
                                    attn_metadata, seq_data_list)
-        en.record()
-        torch.cuda.synchronize()
-        print(f'forward time: {st.elapsed_time(en)} ms')
+        # en.record()
+        # torch.cuda.synchronize()
+        # logger.info(f'forward time: {st.elapsed_time(en)} ms')
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,

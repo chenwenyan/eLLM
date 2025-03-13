@@ -21,6 +21,7 @@ from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
 from vllm.worker.model_runner import ModelRunner
 from vllm.worker.worker_base import WorkerBase
+import logging
 
 
 class Worker(WorkerBase):
@@ -277,6 +278,19 @@ class Worker(WorkerBase):
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[Union[SamplerOutput, PoolerOutput]]:
+        
+        if not self.reshaped:
+            st = torch.cuda.Event(enable_timing=True)
+            st.record()
+            used_layer_ids = self.get_used_layer_ids()
+            self.gpu_cache = self.reshape_kv_cache(used_layer_ids)
+            print(f'After reshape_kv_cache->gpu_cache.length: {len(self.gpu_cache)}')
+            et = torch.cuda.Event(enable_timing=True)
+            # et.record()
+            # torch.cuda.synchronize()
+            # print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
+            self.reshaped = True
+    
         if not self.is_driver_worker:
             self._execute_model_non_driver()
             return []
@@ -290,17 +304,6 @@ class Worker(WorkerBase):
             broadcast_tensor_dict({}, src=0)
             return []
         # print(f'After transfered->execute_model_req.total_block_ids: {execute_model_req.total_block_ids}, len(execute_model_req.total_block_ids): {len(execute_model_req.total_block_ids)}')
-        if not self.reshaped:
-            st = torch.cuda.Event(enable_timing=True)
-            st.record()
-            used_layer_ids = self.get_used_layer_ids()
-            self.gpu_cache = self.reshape_kv_cache(used_layer_ids)
-            et = torch.cuda.Event(enable_timing=True)
-            et.record()
-            torch.cuda.synchronize()
-            print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
-            self.reshaped = True
-
 
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
@@ -373,7 +376,11 @@ class Worker(WorkerBase):
             return False
         
         print(f'Worker _execute_model_non_driver, num_seq_groups: {num_seq_groups}')
-        self.model_runner.execute_model(None, self.gpu_cache)
+        used_layer_ids = self.get_used_layer_ids()
+        gpu_cache = self.reshape_kv_cache(used_layer_ids)
+        print(f'Worker _execute_model_non_driver, self.gpu_cache.length: {len(gpu_cache)}')
+
+        self.model_runner.execute_model(None, gpu_cache)
         return True
 
     def add_lora(self, lora_request: LoRARequest) -> bool:

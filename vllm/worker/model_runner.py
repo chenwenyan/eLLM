@@ -791,9 +791,9 @@ class ModelRunner:
         #         'attn_metadata': attn_metadata,
         #     })
 
-        et.record()
-        torch.cuda.synchronize()
-        print(f'prepare_input_tensors time is {st.elapsed_time(et)} ms')   
+        # et.record()
+        # torch.cuda.synchronize()
+        # print(f'prepare_input_tensors time is {st.elapsed_time(et)} ms')   
             
         execute_model_kwargs = {
             "input_ids": input_tokens,
