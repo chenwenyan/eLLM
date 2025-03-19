@@ -1413,7 +1413,7 @@ class Scheduler:
             )
             seq_group.update_cache_layers(self.cache_layers)
             seq_group_metadata.update_cache_layers(self.cache_layers)
-            logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
+            # logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
 
         # Now that the batch has been created, we can assume all blocks in the
