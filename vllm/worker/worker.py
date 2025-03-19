@@ -255,11 +255,11 @@ class Worker(WorkerBase):
     def get_used_layer_ids(self):
         used_start_layers_ids = self.cache_engine.num_layers // self.cache_config.flatten_layers - 1
         used_layer_ids = [[i + j * self.cache_config.flatten_layers for j in range(used_start_layers_ids + 1)] for i in range(self.cache_config.flatten_layers)]
-        print(f'used_layer_ids: {used_layer_ids}')     
+        # print(f'used_layer_ids: {used_layer_ids}')     
         return used_layer_ids    
 
     def reshape_kv_cache(self, used_layer_ids):
-        print(f'shape of gpu_cache: {self.gpu_cache[0].shape}, len of gpu_cache: {len(self.gpu_cache)}')
+        # print(f'shape of gpu_cache: {self.gpu_cache[0].shape}, len of gpu_cache: {len(self.gpu_cache)}')
         reshaped_cache = []
         for layer_ids in used_layer_ids:
             reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
@@ -286,9 +286,9 @@ class Worker(WorkerBase):
             self.gpu_cache = self.reshape_kv_cache(used_layer_ids)
             print(f'After reshape_kv_cache->gpu_cache.length: {len(self.gpu_cache)}')
             et = torch.cuda.Event(enable_timing=True)
-            # et.record()
-            # torch.cuda.synchronize()
-            # print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
+            et.record()
+            torch.cuda.synchronize()
+            print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
             self.reshaped = True
     
         if not self.is_driver_worker:
@@ -375,10 +375,10 @@ class Worker(WorkerBase):
         if num_seq_groups == 0:
             return False
         
-        print(f'Worker _execute_model_non_driver, num_seq_groups: {num_seq_groups}')
+        # print(f'Worker _execute_model_non_driver, num_seq_groups: {num_seq_groups}')
         used_layer_ids = self.get_used_layer_ids()
         gpu_cache = self.reshape_kv_cache(used_layer_ids)
-        print(f'Worker _execute_model_non_driver, self.gpu_cache.length: {len(gpu_cache)}')
+        # print(f'Worker _execute_model_non_driver, self.gpu_cache.length: {len(gpu_cache)}')
 
         self.model_runner.execute_model(None, gpu_cache)
         return True

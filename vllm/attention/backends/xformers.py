@@ -283,16 +283,12 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
 
         num_prefill_tokens = attn_metadata.num_prefill_tokens
         num_decode_tokens = attn_metadata.num_decode_tokens
-
         # TODO: FIX assert 
         # assert key.shape[0] == num_prefill_tokens + num_decode_tokens
         # assert value.shape[0] == num_prefill_tokens + num_decode_tokens
 
-        try:
-            output = torch.empty_like(query)
-        except RuntimeError as e:
-            logger.info(f"e is {e}")
-            raise e
+        output = torch.empty_like(query)
+        
         # Query for decode. KV is not needed because it is already cached.
         # decode_query = query[num_prefill_tokens:]
         # decode_key = key[num_prefill_tokens:]
@@ -310,9 +306,6 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
             assert query.shape[0] == num_prefill_tokens
             
             # Prompt run.
-            # st_prefill = torch.cuda.Event(enable_timing=True)
-            # et_prefill = torch.cuda.Event(enable_timing=True)
-            # st_prefill.record()
             if kv_cache is None or prefill_meta.block_tables.numel() == 0:
                 # normal attention.
                 # block tables are empty if the prompt does not have a cached
@@ -344,17 +337,10 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 )
                 assert output[:num_prefill_tokens].shape == out.shape
                 output[:num_prefill_tokens] = out
-            # et_prefill.record()
-            # torch.cuda.synchronize()
-            # logger.info(f"prefill_time is {st_prefill.elapsed_time(et_prefill)} ms, prefill_meta.num_prefill_tokens is {prefill_meta.num_prefill_tokens}")
-
         
         if decode_meta := attn_metadata.decode_metadata:
             if kv_cache is None:
                 # normal attention.
-                # recomputing_st = torch.cuda.Event(enable_timing=True)
-                # recomputing_et = torch.cuda.Event(enable_timing=True)
-                # recomputing_st.record()
                 output[num_prefill_tokens:] = PagedAttention.forward_decode_with_dynamic_kv(
                     query,
                     key,
@@ -373,14 +359,8 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                 #     value,
                 #     decode_meta,
                 # )
-                # recomputing_et.record()
-                # torch.cuda.synchronize()
-                # logger.info(f"recomputing_time is {recomputing_st.elapsed_time(recomputing_et)} ms, tokens is {num_prefill_tokens}, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
 
             else:
-                # decode_st = torch.cuda.Event(enable_timing=True)
-                # decode_et = torch.cuda.Event(enable_timing=True)
-                # decode_st.record()    
                 output[num_prefill_tokens:] = PagedAttention.forward_decode(
                     query,
                     key_cache,
@@ -394,11 +374,8 @@ class XFormersImpl(AttentionImpl[XFormersMetadata]):
                     self.alibi_slopes,
                     kv_scale,
                 )
-                # decode_et.record()
-                # torch.cuda.synchronize()
-                # logger.info(f"decode_time is {decode_st.elapsed_time(decode_et)} ms, decode_meta.num_decode_tokens is {decode_meta.num_decode_tokens}")
-        return output.view(-1, self.num_heads * self.head_size)
 
+        return output.view(-1, self.num_heads * self.head_size) 
     def _run_memory_efficient_xformers_forward(
         self,
         query: torch.Tensor,

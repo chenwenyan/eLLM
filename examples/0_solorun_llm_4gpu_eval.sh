@@ -20,13 +20,13 @@ gpu_memory_utilizations=(0.8)
 # store_cache_layerss=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 # store_cache_layerss=(0.0625 0.125 0.25 0.5) # 32层 for llama2-7B
 # store_cache_layerss=(0.05 0.1 0.2 0.25 0.5) # 40层 for llama2-13B
-store_cache_layerss=(0.1)
+store_cache_layerss=(0.05)
 
 models=(meta-llama/Llama-2-70b-hf)
 # models=(meta-llama/Llama-2-13b-hf)
 # request_rates=(50 100 150 200 250 300)
-request_rates=(5)
-num_prompts=(100)
+request_rates=(300)
+num_prompts=(300)
 seeds=(1)
 max_num_seqs=512
 # max_num_seqs=1024
@@ -34,10 +34,8 @@ dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 scheduling_policy=fcfs
 wt_weights=(1.0)
 # wt_weights=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
-flatten_layers=10
-
-rm server.log
-rm client.log
+# flatten_layers=10
+flatten_layers=20
 
 wait_for_server() {
     local port=$1
@@ -66,7 +64,7 @@ for seed in ${seeds[@]}; do
             for num_prompt in ${num_prompts[@]}; do
                 for store_cache_layers in ${store_cache_layerss[@]}; do
                     for wt_weight in ${wt_weights[@]}; do
-                        CUDA_VISIBLE_DEVICES=${gpu_id} taskset -c 2-3 python3 -m vllm.entrypoints.openai.api_server \
+                        CUDA_VISIBLE_DEVICES=${gpu_id} RAY_DEDUP_LOGS=1 taskset -c 2-3 python3 -m vllm.entrypoints.openai.api_server \
                             --model ${model} \
                             --port 8081 \
                             --tensor-parallel-size 4 \
@@ -93,7 +91,7 @@ for seed in ${seeds[@]}; do
                             --request-rate ${request_rate} \
                             --num-prompts ${num_prompt} \
                             --endpoint /v1/completions \
-                            --seed ${seed} > client.log     
+                            --seed ${seed} >> client.log     
                             # >> ${path_dir}/${model_name}_client_${gpu_memory_utilization}_${request_rate}_${num_prompt}_${preemption_mode}_${store_cache_layers}_${scheduling_policy}_wt${wt_weight}.log    
                         # > client.log     
                         kill -9 $pid 

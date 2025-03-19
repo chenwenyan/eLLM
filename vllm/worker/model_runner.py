@@ -754,7 +754,6 @@ class ModelRunner:
         et = torch.cuda.Event(enable_timing=True)
         st.record()
         # _seq_group_metadata_dict = {}
-        print(sampling_metadata.selected_token_indices)
         seq_data_list = []
         for cache_layer in cache_layers:
             cache_layer_index = cache_layers.index(cache_layer)

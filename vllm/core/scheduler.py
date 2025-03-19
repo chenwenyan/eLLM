@@ -802,27 +802,28 @@ class Scheduler:
         self.request_lengths = [len(self.all_requests[i].prompt) for i in range(req_num)]
 
         if len(self.running) + len(self.waiting) <= 1:
-            self.batch_sizes_arr = [1]
-            self.cache_layers_arr = [20]
+            self.batch_sizes_arr = [self.scheduler_config.max_num_seqs]
+            self.cache_layers_arr = [int(self.cache_config.num_layers/2)]
         else:
             if not self.batch_sizes_arr or not self.cache_layers_arr:
                 try:
                     self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers_2()
                 except Exception as e:
                     logger.info(f"Exception: {e}")
-                    self.batch_sizes_arr = [1]
-                    self.cache_layers_arr = [20]
+                    self.batch_sizes_arr = [self.scheduler_config.max_num_seqs]
+                    self.cache_layers_arr = [int(self.cache_config.num_layers/2)]
  
         
         #把batch_sizes, cache_layers转成一个队列
         self.batch_sizes_arr = deque(self.batch_sizes_arr)
         self.cache_layers_arr = deque(self.cache_layers_arr)
 
-        # Include running requests to the budget.
+        # # Include running requests to the budget.
         # budget = SchedulingBudget(
         #     token_budget=self.scheduler_config.max_num_batched_tokens,
         #     max_num_seqs=self.scheduler_config.max_num_seqs,
         # )
+        # self.cache_layers = int(self.cache_config.num_layers * self.cache_config.store_cache_layers)
 
         max_num_seqs = self.batch_sizes_arr.popleft()
         self.cache_layers = self.cache_layers_arr.popleft()
@@ -1243,9 +1244,13 @@ class Scheduler:
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
-        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1)
-        self.M_W = 26  # 26GB
+        self.FLOPS = 624 * 0.55 * 1000000000000 * 4 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.55
+        # llama2-13b on 1GPU
+        # self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) 
+        # self.M_W = 26  # 26GB
+        # llama2-70b on 4GPUs
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * 4
+        self.M_W = 70 * 2  # 140GB 
         # get request length of each request in the batch
 
         h = self.hidden_size
@@ -1253,8 +1258,10 @@ class Scheduler:
         V = self.vocab_size
         R = len(self.request_lengths)
         s_r = self.request_lengths
-        self.epsilon = 20
-        self.SLO = 0.130
+        # self.epsilon = 20
+        self.epsilon = 50
+        # self.SLO = 0.130 // llama2-13b
+        self.SLO = 1.30
         st = time.time()
         # 预计算 A_r, B_r, C_r
         A = []
@@ -1310,20 +1317,21 @@ class Scheduler:
         bounds = [(1, R), (0, L)]  # b >= 1, l >= 0
 
         # 初始猜测
-        initial_guess = [20, 10]
+        # initial_guess = [20, 10] # llama2-13b
+        initial_guess = [300, 80] # llama2-70b
 
         # 调用优化器
         solution = minimize(
             objective,
             initial_guess,
-            method='SLSQP',
+            method='L-BFGS-B',
             bounds=bounds,
             constraints=constraints,
             options={'maxiter': 20, 'disp': False},
         )
 
         et = time.time()
-        logger.info(f"Time: {(et - st)*1000} ms")
+        logger.info(f"Solve the Optimization Problem Time is: {(et - st)*1000} ms")
         # 输出结果
         b_opt, l_opt = solution.x
         final_l = np.round(l_opt).astype(int)
@@ -1331,7 +1339,7 @@ class Scheduler:
         final_b = int(b_opt)
         logger.info(f"Optimal b: {final_b}")
         logger.info(f"Optimal l: {final_l}")
-        logger.info(f"Objective value: {solution.fun}")
+        logger.info(f"Objective value: {solution.fun}, Iterations: {solution.nit}")
         return [int(final_b)], [final_l]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
@@ -1405,7 +1413,7 @@ class Scheduler:
             )
             seq_group.update_cache_layers(self.cache_layers)
             seq_group_metadata.update_cache_layers(self.cache_layers)
-            # logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
+            logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
 
         # Now that the batch has been created, we can assume all blocks in the

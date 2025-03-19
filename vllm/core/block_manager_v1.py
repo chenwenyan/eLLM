@@ -285,7 +285,8 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         seq = seq_group.get_seqs(status=SequenceStatus.WAITING)[0]
         num_required_blocks = len(seq.logical_token_blocks)
         print(f'num_required_blocks is {num_required_blocks}, seq_group.cache_layers is {seq_group.cache_layers}')
-        num_required_blocks = int(seq_group.cache_layers / self.flatten_layers) * num_required_blocks 
+        # TODO: wychen
+        # num_required_blocks = int(seq_group.cache_layers / self.flatten_layers) * num_required_blocks 
 
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,

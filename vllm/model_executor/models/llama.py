@@ -50,6 +50,8 @@ from vllm.sequence import SamplerOutput
 from vllm.utils import is_hip, print_warning_once
 from vllm.logger import init_logger
 from vllm import _custom_ops as ops
+from contextlib import contextmanager
+import time
 
 import itertools
 logger = init_logger(__name__)
@@ -84,6 +86,21 @@ class LlamaMLP(nn.Module):
         x, _ = self.down_proj(x)
         return x
 
+
+@contextmanager
+def timer(stage:str):
+    st = torch.cuda.Event(enable_timing=True)
+    et = torch.cuda.Event(enable_timing=True)
+    torch.cuda.synchronize()
+    st.record()
+    try:
+        yield
+    finally:
+        et.record()
+        torch.cuda.synchronize()
+        logger.info(f"{stage} used {st.elapsed_time(et)} ms")
+
+    
 
 class HFusedLlamaMLP(nn.Module):
 
@@ -217,23 +234,33 @@ class LlamaAttention(nn.Module):
             output, _ = self.o_proj(attn_output)
             return output
         else:
-            last_qkv, _ = self.qkv_proj(last_hidden_states)
-            last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-            last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
-            # logger.info(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
+            with timer("before attention"):
+                last_qkv, _ = self.qkv_proj(last_hidden_states)
+                last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+                last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
+                # logger.info(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
         
-            qkv, _ = self.qkv_proj(hidden_states)
-            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-            q, k = self.rotary_emb(positions, q, k)
-            # logger.info(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
+                qkv, _ = self.qkv_proj(hidden_states)
+                q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+                q, k = self.rotary_emb(positions, q, k)
+                # logger.info(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
 
-            # attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
-            # fused attention 
-            last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
+                # attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+                # fused attention 
+            with timer("fused_attention"):
+                last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
             # logger.info(f'last_attn_output: {last_attn_output.shape}, attn_output: {attn_output.shape}')
-            last_output, _ = self.o_proj(last_attn_output)
-            output, _ = self.o_proj(attn_output)
             
+            with timer("merged o_proj calls"):
+                # 假设在批处理维度（dim=0）拼接；根据实际情况调整dim参数
+                combined_input = torch.cat([last_attn_output, attn_output], dim=0)
+                combined_output, _ = self.o_proj(combined_input)
+                # 拆分结果
+                split_size = last_attn_output.size(0)
+                last_output = combined_output[:split_size]
+                output = combined_output[split_size:]
+
+            torch.cuda.synchronize()        
             return last_output, output
 
 
@@ -345,42 +372,40 @@ class LlamaDecoderLayer(nn.Module):
             if residual is not None:
                 hidden_states, residual = self.input_layernorm(
                     hidden_states, residual)      
-                
             last_hidden_states, hidden_states = self.self_attn(
-                positions=positions,
-                hidden_states=hidden_states,
-                kv_cache=kv_cache,
-                attn_metadata=attn_metadata,
-                fused=True,
-                last_positions=last_positions,
-                last_hidden_states=last_hidden_states,
-                last_kv_cache=last_kv_cache,
-                last_attn_metadata=last_attn_metadata,
+                    positions=positions,
+                    hidden_states=hidden_states,
+                    kv_cache=kv_cache,
+                    attn_metadata=attn_metadata,
+                    fused=True,
+                    last_positions=last_positions,
+                    last_hidden_states=last_hidden_states,
+                    last_kv_cache=last_kv_cache,
+                    last_attn_metadata=last_attn_metadata,
             )
-
             last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
                 last_hidden_states, hidden_states, last_residual, residual)
             
             last_hidden_states, hidden_states = self.hfused_mlp(
                 last_hidden_states, hidden_states)
             
-            last_hidden_states, hidden_states = self.self_attn(
-                positions=positions,
-                hidden_states=hidden_states,
-                kv_cache=kv_cache,
-                attn_metadata=attn_metadata,
-                fused=True,
-                last_positions=last_positions,
-                last_hidden_states=last_hidden_states,
-                last_kv_cache=last_kv_cache,
-                last_attn_metadata=last_attn_metadata,
-            )
+            # last_hidden_states, hidden_states = self.self_attn(
+            #     positions=positions,
+            #     hidden_states=hidden_states,
+            #     kv_cache=kv_cache,
+            #     attn_metadata=attn_metadata,
+            #     fused=True,
+            #     last_positions=last_positions,
+            #     last_hidden_states=last_hidden_states,
+            #     last_kv_cache=last_kv_cache,
+            #     last_attn_metadata=last_attn_metadata,
+            # )
 
-            last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
-                last_hidden_states, hidden_states, last_residual, residual)
+            # last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
+            #     last_hidden_states, hidden_states, last_residual, residual)
             
-            last_hidden_states, hidden_states = self.hfused_mlp(
-                last_hidden_states, hidden_states)
+            # last_hidden_states, hidden_states = self.hfused_mlp(
+            #     last_hidden_states, hidden_states)
 
             return last_hidden_states, last_residual, hidden_states, residual
 
@@ -410,7 +435,7 @@ class LlamaModel(nn.Module):
             for _ in range(config.num_hidden_layers)
         ])
 
-        logger.info(f'config.num_hidden_layers: {config.num_hidden_layers}')
+        # logger.info(f'config.num_hidden_layers: {config.num_hidden_layers}')
 
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.cache_config = cache_config
@@ -473,9 +498,9 @@ class LlamaModel(nn.Module):
                 best_recomputed_layers = recomputed_layers
                 best_swapped_layers = swapped_layers
 
-        logger.info(f"Best recomputed layers: {best_recomputed_layers}")
-        logger.info(f"Best swapped layers: {best_swapped_layers}")
-        logger.info(f"Best cost gap: {best_cost}")
+        # logger.info(f"Best recomputed layers: {best_recomputed_layers}")
+        # logger.info(f"Best swapped layers: {best_swapped_layers}")
+        # logger.info(f"Best cost gap: {best_cost}")
         # et.record()
         # torch.cuda.synchronize()
         # logger.info(f'get_best_layer time: {st.elapsed_time(et)} ms')
@@ -490,137 +515,156 @@ class LlamaModel(nn.Module):
         seq_data_list: Optional[List] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        # if inputs_embeds is not None:
+        #     hidden_states = inputs_embeds
+        # else:
+        #     hidden_states = self.get_input_embeddings(input_ids)
+        # residual = None
+        # store_cache_layer_id=int(len(self.layers)*self.cache_config.store_cache_layers)-1
+        # stream1 = torch.cuda.Stream()
+        # stream2 = torch.cuda.Stream()
+        # # 创建一个同步事件（用于跨流协调）
+        # load_complete_event = torch.cuda.Event()
+        # # logger.info(f'kv_caches_length: {len(kv_caches)}')
+        # # 判断kv caches是否为空
+
+        # if attn_metadata.prefill_metadata is not None:
+        #     self.last_attn_metadata = attn_metadata
+        #     self.last_positions = positions
+        #     self.num_prefill_tokens = attn_metadata.prefill_metadata.num_prefill_tokens
+
+        #     for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)-1):
+        #         layer = self.layers[i]
+        #         hidden_states, residual = layer(
+        #             positions,
+        #             hidden_states,
+        #             kv_caches[i],
+        #             attn_metadata,
+        #             residual,
+        #         )
+        #     self.last_hidden_states = hidden_states
+        #     self.last_residual = residual
+
+        #     if self.cache_config.store_cache_layers < 1:
+        #         for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)-1, len(self.layers)):
+        #             # recomputing kv_caches for the layers that are not stored
+        #             kv_cache = None
+        #             hidden_states, residual = self.layers[i](
+        #                 positions,
+        #                 hidden_states,
+        #                 kv_cache,
+        #                 attn_metadata,
+        #                 residual,
+        #             )
+        # else: 
+        #     layer_indexs = [seq_data['layer_index'] for seq_data in seq_data_list]
+        #     # 第一次prefilling时不需要并行，decoding阶段需要并行
+        #     i = 0
+        #     while i < len(self.layers) - 2:
+        #         if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-4:
+        #             hidden_states, residual = self.layers[i](
+        #                 positions,
+        #                 hidden_states,
+        #                 kv_caches[i],
+        #                 attn_metadata,
+        #                 residual,
+        #             )  
+        #         else:
+        #             # logger.info(f'fused layer: {i}')
+        #             if i in layer_indexs:
+        #                 input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
+        #                 if inputs_embeds is None:
+        #                     hidden_states = self.get_input_embeddings(input_ids)
+        #                 positions = seq_data_list[layer_indexs.index(i)]['positions']
+        #                 attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
+
+        #             swapped_layers, recomputed_layers = [1,2], [3] 
+        #             with torch.cuda.stream(stream1):
+        #                 # load kv caches from cpu to gpu
+        #                 logger.info(f'load kv caches from cpu to gpu, layer: {i}')
+        #                 sleep_time = self.get_communication_cost(swapped_layers, attn_metadata)
+        #                 logger.info(f'sleep_time: {sleep_time}')
+        #                 time.sleep(sleep_time)
+        #                 # 记录事件：stream1完成加载
+        #                 load_complete_event.record(stream=stream1)
+                        
+        #             i += len(swapped_layers)
+        #             kv_cache = kv_caches[store_cache_layer_id]
+        #             with torch.cuda.stream(stream2):    
+        #                 load_complete_event.wait(stream=stream2)
+        #                 last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
+        #                     positions,
+        #                     hidden_states,
+        #                     None,
+        #                     attn_metadata,
+        #                     residual,
+        #                     True,
+        #                     self.last_positions,
+        #                     self.last_hidden_states,
+        #                     kv_cache,
+        #                     self.last_attn_metadata,
+        #                     self.last_residual,
+        #                 )
+
+        #             self.last_hidden_states = last_hidden_states
+        #             self.last_residual = last_residual
+        #             # logger.info(f'after added, fused layer: {i}')
+        #             i += 2 # skip two layers
+        #             continue  # 跳过当前迭代，进入下一次迭代
+        #         i += 1
+            
+        #     torch.cuda.synchronize()
+        #     # The last layer is not fused
+        #     logger.info(f'torch cuda time: {st.elapsed_time(et)} ms, {input_ids.device}')
+        #     hidden_states, residual = self.layers[-2](
+        #         positions,
+        #         hidden_states,
+        #         None,
+        #         attn_metadata,
+        #         residual,
+        #     )
+
+        #     hidden_states, residual = self.layers[-1](
+        #         positions,
+        #         hidden_states,
+        #         None,
+        #         attn_metadata,
+        #         residual,
+        #     )
+                    
+        # hidden_states, _ = self.norm(hidden_states, residual)
+        # return hidden_states
+
         if inputs_embeds is not None:
             hidden_states = inputs_embeds
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
-        logger.info(f'kv_caches_length: {len(kv_caches)}')
-        # 判断kv caches是否为空
-        if attn_metadata.prefill_metadata is not None:
-            self.last_attn_metadata = attn_metadata
-            self.last_positions = positions
-            self.num_prefill_tokens = attn_metadata.prefill_metadata.num_prefill_tokens
-
-            for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)-1):
-                layer = self.layers[i]
-                hidden_states, residual = layer(
-                    positions,
-                    hidden_states,
-                    kv_caches[i],
-                    attn_metadata,
-                    residual,
-                )
-            self.last_hidden_states = hidden_states
-            self.last_residual = residual
-
-            if self.cache_config.store_cache_layers < 1:
-                for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)-1, len(self.layers)):
-                    # recomputing kv_caches for the layers that are not stored
-                    kv_cache = None
-                    hidden_states, residual = self.layers[i](
-                        positions,
-                        hidden_states,
-                        kv_cache,
-                        attn_metadata,
-                        residual,
-                    )
-        else: 
-            layer_indexs = [seq_data['layer_index'] for seq_data in seq_data_list]
-            # 第一次prefilling时不需要并行，decoding阶段需要并行
-            i = 0
-            while i < len(self.layers) - 2:
-                if i <= int(len(self.layers)*self.cache_config.store_cache_layers)-4:
-                    hidden_states, residual = self.layers[i](
-                        positions,
-                        hidden_states,
-                        kv_caches[i],
-                        attn_metadata,
-                        residual,
-                    )  
-                else:
-                    # logger.info(f'fused layer: {i}')
-                    if i in layer_indexs:
-                        input_ids = seq_data_list[layer_indexs.index(i)]['input_ids']
-                        if inputs_embeds is None:
-                            hidden_states = self.get_input_embeddings(input_ids)
-                        positions = seq_data_list[layer_indexs.index(i)]['positions']
-                        attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
-
-                    # # horizonal kernel fusion
-                    # st = torch.cuda.Event(enable_timing=True)
-                    # et = torch.cuda.Event(enable_timing=True)
-                    # st.record()
-                    stream1 = torch.cuda.Stream()
-                    stream2 = torch.cuda.Stream()
-                    # 创建一个同步事件（用于跨流协调）
-                    load_complete_event = torch.cuda.Event()
-                    # 判断是否从cpu加载kv caches到gpu，如果加载时间慢，则直接用重新计算的方式
-
-                    total_seq_len = sum([seq_data['attn_metadata'].total_seq_len for seq_data in seq_data_list])
-                    
-                    swapped_layers, recomputed_layers = self.get_best_layer(total_seq_len, attn_metadata)
-                    with torch.cuda.stream(stream1):
-                        # load kv caches from cpu to gpu
-                        logger.info(f'load kv caches from cpu to gpu, layer: {i}')
-                        # import time
-                        # sleep_time = self.get_communication_cost(swapped_layers, attn_metadata)
-                        # logger.info(f'sleep_time: {sleep_time}')
-                        # time.sleep(sleep_time)
-                        # 记录事件：stream1完成加载
-                        load_complete_event.record(stream=stream1)
-                        
-                    i += len(swapped_layers)
-                    with torch.cuda.stream(stream2):    
-                        last_hidden_states, last_residual, hidden_states, residual = self.layers[i](
-                            positions,
-                            hidden_states,
-                            None,
-                            attn_metadata,
-                            residual,
-                            True,
-                            self.last_positions,
-                            self.last_hidden_states,
-                            kv_caches[int(len(self.layers)*self.cache_config.store_cache_layers)-1],
-                            self.last_attn_metadata,
-                            self.last_residual,
-                        )
-                    # 3. 在发起任何集体通信（如AllReduce）前，同步所有相关流
-                    # 同步stream2（计算流）
-                    stream2.synchronize()
-                    # 同步默认流（NCCL通信使用默认流）
-                    torch.cuda.current_stream().synchronize()
-                    # et.record()
-                    # torch.cuda.synchronize()
-                    # logger.info(f'recomputing time: {st.elapsed_time(et)} ms, tokens: {attn_metadata.decode_metadata.num_decode_tokens+self.num_prefill_tokens}')
-
-                    self.last_hidden_states = last_hidden_states
-                    self.last_residual = last_residual
-                    # logger.info(f'after added, fused layer: {i}')
-                    i += 2 # skip two layers
-                    continue  # 跳过当前迭代，进入下一次迭代
-                i += 1
-
-            # The last layer is not fused
-            hidden_states, residual = self.layers[-2](
+        for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)):
+        # for i in range(len(self.layers)):
+            layer = self.layers[i]
+            hidden_states, residual = layer(
                 positions,
                 hidden_states,
-                None,
+                kv_caches[i],
                 attn_metadata,
                 residual,
-            )
-
-            hidden_states, residual = self.layers[-1](
-                positions,
-                hidden_states,
-                None,
-                attn_metadata,
-                residual,
-            )
-                    
+            ) 
+        # if self.cache_config.store_cache_layers < 1:
+        #     for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
+        #         layer = self.layers[i]
+        #         # recomputing kv_caches for the layers that are not stored
+        #         kv_cache = None
+        #         hidden_states, residual = layer(
+        #         positions,
+        #         hidden_states,
+        #         kv_cache,
+        #         attn_metadata,
+        #         residual,
+        #     )  
+  
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
-
 
 class LlamaForCausalLM(nn.Module):
     packed_modules_mapping = {
