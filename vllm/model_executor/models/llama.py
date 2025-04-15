@@ -35,7 +35,8 @@ from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.layernorm import RMSNorm, HFusedRMSNorm
 from vllm.model_executor.layers.linear import (MergedColumnParallelLinear,
                                                QKVParallelLinear,
-                                               RowParallelLinear)
+                                               RowParallelLinear,
+                                               ColumnParallelLinear)
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig)
@@ -81,9 +82,21 @@ class LlamaMLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
+        # with timer("gate_up_proj"):
         gate_up, _ = self.gate_up_proj(x)
+
+        # with timer("act_fn"):    
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
+        
+        # with timer("merged down_proj calls"):
+        #     # 假设在批处理维度（dim=0）拼接；根据实际情况调整dim参数
+        #     combined_input = torch.cat([x, x], dim=0)
+        #     combined_output, _ = self.down_proj(combined_input)
+        #     # 拆分结果
+        #     split_size = x.size(0)
+        #     last_x = combined_output[:split_size]
+        #     x = combined_output[split_size:]    
         return x
 
 
@@ -135,7 +148,8 @@ class HFusedLlamaMLP(nn.Module):
         bias = torch.empty(x.shape[-1], dtype=torch.float16, device=x.device)
 
         # logger.info("before mlp", out.shape, last_out.shape, x.shape, last_x.shape)
-        ops.hfused_mlp(last_out, out, last_x, x, weight, bias) 
+        # with timer("before fused mlp"):
+        ops.hfused_mlp(last_out, out, last_x, x, weight, bias)
         # logger.info("after mlp",out.shape, last_out.shape, x.shape, last_x.shape)
         # torch.cuda.synchronize()
         return last_out, out
@@ -193,6 +207,14 @@ class LlamaAttention(nn.Module):
             quant_config=quant_config,
         )
 
+        self.o_proj_column = ColumnParallelLinear(
+            hidden_size,
+            self.total_num_heads * self.head_dim,
+            bias=bias,
+            gather_output=True,
+            quant_config=quant_config,
+        )
+        
         self.rotary_emb = get_rope(
             self.head_dim,
             rotary_dim=self.head_dim,
@@ -234,33 +256,42 @@ class LlamaAttention(nn.Module):
             output, _ = self.o_proj(attn_output)
             return output
         else:
-            with timer("before attention"):
-                last_qkv, _ = self.qkv_proj(last_hidden_states)
-                last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-                last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
-                # logger.info(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
-        
-                qkv, _ = self.qkv_proj(hidden_states)
-                q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-                q, k = self.rotary_emb(positions, q, k)
+            # with timer("before attention"):
+            last_qkv, _ = self.qkv_proj(last_hidden_states)
+            last_q, last_k, last_v = last_qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            last_q, last_k = self.rotary_emb(last_positions, last_q, last_k)
+            # logger.info(f'last_q: {last_q.shape}, last_k: {last_k.shape}, last_v: {last_v.shape}')
+    
+            qkv, _ = self.qkv_proj(hidden_states)
+            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            q, k = self.rotary_emb(positions, q, k)
+            
                 # logger.info(f'q: {q.shape}, k: {k.shape}, v: {v.shape}')
 
                 # attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
                 # fused attention 
-            with timer("fused_attention"):
-                last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
+            # with timer("fused_attention"):
+            last_attn_output, attn_output = self.hfused_attn(last_q, last_k, last_v, last_kv_cache, last_attn_metadata, q, k, v, kv_cache, attn_metadata)
             # logger.info(f'last_attn_output: {last_attn_output.shape}, attn_output: {attn_output.shape}')
             
-            with timer("merged o_proj calls"):
-                # 假设在批处理维度（dim=0）拼接；根据实际情况调整dim参数
-                combined_input = torch.cat([last_attn_output, attn_output], dim=0)
-                combined_output, _ = self.o_proj(combined_input)
-                # 拆分结果
-                split_size = last_attn_output.size(0)
-                last_output = combined_output[:split_size]
-                output = combined_output[split_size:]
+            # org
+            # with timer("org o_proj"):
+            #     last_output, _ = self.o_proj(last_attn_output)
+            #     output, _ = self.o_proj(attn_output)
 
-            torch.cuda.synchronize()        
+                # last_output = self.o_proj_column(last_attn_output)
+                # output = self.o_proj_column(attn_output)
+
+            # with timer("merged o_proj calls"):
+            # 假设在批处理维度（dim=0）拼接；根据实际情况调整dim参数
+            combined_input = torch.cat([last_attn_output, attn_output], dim=0)
+            combined_output, _ = self.o_proj(combined_input)
+            # 拆分结果
+            split_size = last_attn_output.size(0)
+            last_output = combined_output[:split_size]
+            output = combined_output[split_size:]
+
+            # torch.cuda.synchronize()        
             return last_output, output
 
 
@@ -355,6 +386,7 @@ class LlamaDecoderLayer(nn.Module):
             # Fully Connected
             hidden_states, residual = self.post_attention_layernorm(
                 hidden_states, residual)
+            # with timer("org mlp"):
             hidden_states = self.mlp(hidden_states)
             return hidden_states, residual
         
@@ -383,11 +415,11 @@ class LlamaDecoderLayer(nn.Module):
                     last_kv_cache=last_kv_cache,
                     last_attn_metadata=last_attn_metadata,
             )
-            last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
-                last_hidden_states, hidden_states, last_residual, residual)
+            # last_hidden_states, last_residual, hidden_states, residual = self.hfused_post_attention_layernorm(
+            #     last_hidden_states, hidden_states, last_residual, residual)
             
-            last_hidden_states, hidden_states = self.hfused_mlp(
-                last_hidden_states, hidden_states)
+            # last_hidden_states, hidden_states = self.hfused_mlp(
+            #     last_hidden_states, hidden_states)
             
             # last_hidden_states, hidden_states = self.self_attn(
             #     positions=positions,
@@ -450,7 +482,7 @@ class LlamaModel(nn.Module):
         return self.embed_tokens(input_ids)
 
     def get_computation_cost(self, request_lens, recomputed_layers):
-        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.55
+        self.FLOPS = 624 * 0.55 * 1000000000000 * get_tensor_model_parallel_world_size()
         self.num_layers=self.layers
         self.hidden_size=self.config.hidden_size
         self.epsilon=20
@@ -520,6 +552,7 @@ class LlamaModel(nn.Module):
         # else:
         #     hidden_states = self.get_input_embeddings(input_ids)
         # residual = None
+
         # store_cache_layer_id=int(len(self.layers)*self.cache_config.store_cache_layers)-1
         # stream1 = torch.cuda.Stream()
         # stream2 = torch.cuda.Stream()
@@ -578,7 +611,8 @@ class LlamaModel(nn.Module):
         #                 positions = seq_data_list[layer_indexs.index(i)]['positions']
         #                 attn_metadata = seq_data_list[layer_indexs.index(i)]['attn_metadata']
 
-        #             swapped_layers, recomputed_layers = [1,2], [3] 
+        #             total_seq_len = sum([seq_data['attn_metadata'].total_seq_len for seq_data in seq_data_list])
+        #             swapped_layers, recomputed_layers = self.get_best_layer(total_seq_len, attn_metadata)
         #             with torch.cuda.stream(stream1):
         #                 # load kv caches from cpu to gpu
         #                 logger.info(f'load kv caches from cpu to gpu, layer: {i}')
@@ -615,7 +649,7 @@ class LlamaModel(nn.Module):
             
         #     torch.cuda.synchronize()
         #     # The last layer is not fused
-        #     logger.info(f'torch cuda time: {st.elapsed_time(et)} ms, {input_ids.device}')
+        #     # logger.info(f'torch cuda time: {st.elapsed_time(et)} ms, {input_ids.device}')
         #     hidden_states, residual = self.layers[-2](
         #         positions,
         #         hidden_states,
@@ -635,6 +669,8 @@ class LlamaModel(nn.Module):
         # hidden_states, _ = self.norm(hidden_states, residual)
         # return hidden_states
 
+
+        # TODO: 优化代码
         if inputs_embeds is not None:
             hidden_states = inputs_embeds
         else:
@@ -650,18 +686,6 @@ class LlamaModel(nn.Module):
                 attn_metadata,
                 residual,
             ) 
-        # if self.cache_config.store_cache_layers < 1:
-        #     for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
-        #         layer = self.layers[i]
-        #         # recomputing kv_caches for the layers that are not stored
-        #         kv_cache = None
-        #         hidden_states, residual = layer(
-        #         positions,
-        #         hidden_states,
-        #         kv_cache,
-        #         attn_metadata,
-        #         residual,
-        #     )  
   
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
@@ -731,14 +755,8 @@ class LlamaForCausalLM(nn.Module):
         attn_metadata: AttentionMetadata,
         seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
-        # st = torch.cuda.Event(enable_timing=True)
-        # en = torch.cuda.Event(enable_timing=True)
-        # st.record()
         hidden_states = self.model(input_ids, positions, kv_caches,
                                    attn_metadata, seq_data_list)
-        # en.record()
-        # torch.cuda.synchronize()
-        # logger.info(f'forward time: {st.elapsed_time(en)} ms')
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,

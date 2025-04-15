@@ -166,7 +166,7 @@ class Worker(WorkerBase):
         # GPU did not change their memory usage during the profiling.
         
         peak_memory = self.init_gpu_memory - free_gpu_memory
-        # print(f'free_gpu_memory: {free_gpu_memory}, total_gpu_memory: {total_gpu_memory}, peak_memory: {peak_memory}')
+        print(f'free_gpu_memory: {free_gpu_memory}, init_gpu_memory: {self.init_gpu_memory}, peak_memory: {peak_memory}')
         
         # peak_memory = torch.cuda.max_memory_allocated()
 
@@ -184,8 +184,8 @@ class Worker(WorkerBase):
         
         flatten_layers = self.cache_config.flatten_layers
         print(f'num_layers: {self.cache_config.num_layers}, flatten_layers: {flatten_layers}')
-        num_gpu_blocks = num_gpu_blocks * int(self.cache_config.num_layers / flatten_layers)
-        num_cpu_blocks = num_cpu_blocks * int(self.cache_config.num_layers / flatten_layers)
+        # num_gpu_blocks = num_gpu_blocks * int(self.cache_config.num_layers / flatten_layers)
+        # num_cpu_blocks = num_cpu_blocks * int(self.cache_config.num_layers / flatten_layers)
 
         num_gpu_blocks = max(num_gpu_blocks, 0)
         num_cpu_blocks = max(num_cpu_blocks, 0)
@@ -281,14 +281,14 @@ class Worker(WorkerBase):
         
         if not self.reshaped:
             st = torch.cuda.Event(enable_timing=True)
-            st.record()
+            # st.record()
             used_layer_ids = self.get_used_layer_ids()
             self.gpu_cache = self.reshape_kv_cache(used_layer_ids)
             print(f'After reshape_kv_cache->gpu_cache.length: {len(self.gpu_cache)}')
-            et = torch.cuda.Event(enable_timing=True)
-            et.record()
-            torch.cuda.synchronize()
-            print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
+            # et = torch.cuda.Event(enable_timing=True)
+            # et.record()
+            # torch.cuda.synchronize()
+            # print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
             self.reshaped = True
     
         if not self.is_driver_worker:

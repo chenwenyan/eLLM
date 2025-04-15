@@ -143,6 +143,9 @@ class ModelRunner:
                 cache_config=self.cache_config,
             )
 
+        # print the model structure
+        print("model: ", self.model)    
+
         self.model_memory_usage = m.consumed_memory
         logger.info("Loading model weights took %.4f GB",
                     self.model_memory_usage / float(2**30))
@@ -750,10 +753,6 @@ class ModelRunner:
             model_executable = self.model
         
         # 新建一个字典，用于存储每一层的输入数据
-        st = torch.cuda.Event(enable_timing=True)
-        et = torch.cuda.Event(enable_timing=True)
-        st.record()
-        # _seq_group_metadata_dict = {}
         seq_data_list = []
         for cache_layer in cache_layers:
             cache_layer_index = cache_layers.index(cache_layer)
@@ -767,32 +766,6 @@ class ModelRunner:
                 'positions': sub_input_positions,
                 'attn_metadata': sub_attn_metadata,
             })
-
-        # print(f'MODEL_RUNNER: len(seq_group_metadata_list) is {len(seq_group_metadata_list)}')       
-        # for seq_group_metadata in seq_group_metadata_list:
-        #     cache_layers = seq_group_metadata.cache_layers
-        #     layer_index = cache_layers - 1
-            
-        #     if layer_index not in _seq_group_metadata_dict:
-        #         _seq_group_metadata_dict[layer_index] = [seq_group_metadata]
-        #     else:
-        #         _seq_group_metadata_dict[layer_index].append(seq_group_metadata)
-
-        # seq_data_list = []
-        # for layer_index, seq_group_metadata_list in _seq_group_metadata_dict.items():
-        #     (input_tokens, input_positions, attn_metadata, sampling_metadata,
-        #         lora_requests, lora_mapping, multi_modal_input
-        #     ) = self.prepare_input_tensors(seq_group_metadata_list)
-        #     seq_data_list.append({
-        #         'layer_index': layer_index,
-        #         'input_ids': input_tokens,
-        #         'positions': input_positions,
-        #         'attn_metadata': attn_metadata,
-        #     })
-
-        # et.record()
-        # torch.cuda.synchronize()
-        # print(f'prepare_input_tensors time is {st.elapsed_time(et)} ms')   
             
         execute_model_kwargs = {
             "input_ids": input_tokens,
@@ -829,6 +802,7 @@ class ModelRunner:
         sampling_params = SamplingParams(top_p=0.99, top_k=self.vocab_size - 1)
         max_num_batched_tokens = self.scheduler_config.max_num_batched_tokens
         max_num_seqs = self.scheduler_config.max_num_seqs
+
         # This represents the maximum number of different requests
         # that will have unique loras, an therefore the max amount of memory
         # consumption create dummy lora request copies from the lora request
@@ -886,8 +860,7 @@ class ModelRunner:
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
-        kv_caches = [None] * int(num_layers)
-        # kv_caches = [None] * int(num_layers*self.cache_config.store_cache_layers)
+        kv_caches = [None] * num_layers
         self.execute_model(seqs, kv_caches)
         torch.cuda.synchronize()
         return

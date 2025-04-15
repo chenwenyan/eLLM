@@ -95,8 +95,8 @@ class EngineArgs:
     preemption_mode: Optional[str] = None
     store_cache_layers: float = 1.0
     scheduling_policy: Optional[str] = None
-    wt_weight: float = 0.5
-    flatten_layers: int = 10
+    wt_weight: float = 1.0
+    flatten_layers: Optional[int] = None
 
     def __post_init__(self):
         if self.tokenizer is None:
@@ -560,8 +560,7 @@ class EngineArgs:
 
         parser.add_argument(
             '--flatten-layers',
-            type=float,
-            default=EngineArgs.flatten_layers,
+            type=int,
             help='The flatten layers.')
         
         parser.add_argument(
@@ -604,7 +603,8 @@ class EngineArgs:
                                    self.num_gpu_blocks_override,
                                    model_config.get_sliding_window(),
                                    self.enable_prefix_caching,
-                                   self.store_cache_layers)
+                                   self.store_cache_layers,
+                                   self.flatten_layers)
         parallel_config = ParallelConfig(
             self.pipeline_parallel_size,
             self.tensor_parallel_size,
