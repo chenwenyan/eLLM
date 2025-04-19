@@ -264,6 +264,26 @@ class Worker(WorkerBase):
         for layer_ids in used_layer_ids:
             reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
         return reshaped_cache
+    
+    # def reshape_kv_cache(self, used_layer_ids):
+    #     reshaped_cache = []
+    #     for layer_ids in used_layer_ids:
+    #         # 预分配目标张量
+    #         first_cache = self.gpu_cache[layer_ids[0]]
+    #         total_size = sum(self.gpu_cache[i].size(0) for i in layer_ids)
+    #         out = torch.empty((total_size, *first_cache.shape[1:]), 
+    #                     dtype=first_cache.dtype, 
+    #                     device=first_cache.device)
+            
+    #         # 使用切片赋值避免中间结果
+    #         offset = 0
+    #         for i in layer_ids:
+    #             current = self.gpu_cache[i]
+    #             out[offset:offset+current.size(0)] = current
+    #             offset += current.size(0)
+            
+    #         reshaped_cache.append(out)
+    #     return reshaped_cache
 
     def split_gpu_cache(self, used_layer_ids, reshaped_caches):
         split_nums = len(used_layer_ids[0])

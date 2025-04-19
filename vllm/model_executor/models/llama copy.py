@@ -344,13 +344,13 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
 
-        # self.hfused_mlp = HFusedLlamaMLP(
-        #     hidden_size=self.hidden_size,
-        #     intermediate_size=config.intermediate_size,
-        #     hidden_act=config.hidden_act,
-        #     quant_config=quant_config,
-        #     bias=getattr(config, "mlp_bias", False),
-        # )
+        self.hfused_mlp = HFusedLlamaMLP(
+            hidden_size=self.hidden_size,
+            intermediate_size=config.intermediate_size,
+            hidden_act=config.hidden_act,
+            quant_config=quant_config,
+            bias=getattr(config, "mlp_bias", False),
+        )
         self.hfused_post_attention_layernorm = HFusedRMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
 

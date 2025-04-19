@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig, ModelConfig
+from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig, ModelConfig, ParallelConfig
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.core.policy import Policy, PolicyFactory
 from vllm.logger import init_logger
@@ -275,6 +275,7 @@ class Scheduler:
         cache_config: CacheConfig,
         model_config: ModelConfig,
         lora_config: Optional[LoRAConfig],
+        parallel_config: Optional[ParallelConfig] = None,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
@@ -283,6 +284,7 @@ class Scheduler:
         # simple and NOT fair. It can lead to starvation of some
         # LoRAs. This should be improved in the future.
         self.lora_config = lora_config
+        self.parallel_config = parallel_config
 
         version = "v1"
         if self.scheduler_config.use_v2_block_manager:
@@ -807,7 +809,7 @@ class Scheduler:
         else:
             if not self.batch_sizes_arr or not self.cache_layers_arr:
                 try:
-                    self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers_2()
+                    self.batch_sizes_arr, self.cache_layers_arr = self.get_opt_bs_and_layers()
                 except Exception as e:
                     logger.info(f"Exception: {e}")
                     self.batch_sizes_arr = [self.scheduler_config.max_num_seqs]
@@ -1038,15 +1040,21 @@ class Scheduler:
         )
 
     
-    def get_opt_bs_and_layers(self):
+    def get_opt_bs_and_layers_2(self):
 
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
-        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * (self.cache_config.gpu_memory_utilization)
-        self.M_W = 26  # 26GB
-        # get request length of each request in the batch
+        self.FLOPS = 312 * 10**12 * self.parallel_config.tensor_parallel_size # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * self.parallel_config.tensor_parallel_size
+        if self.num_layers == 40: # for llama2-13B
+            self.M_W = 26 * 2
+            self.SLO = 0.130
+            self.epsilon = 20
+        elif self.num_layers == 80: # for llama2-70B
+            self.M_W = 70 * 2
+            self.SLO = 0.250
+            self.epsilon = 40
 
         h = self.hidden_size
         L = self.num_layers
@@ -1144,10 +1152,16 @@ class Scheduler:
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
-        self.FLOPS = 624 * 0.55 * 1000000000000 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1)
-        self.M_W = 26  # 26GB
-        # get request length of each request in the batch
+        self.FLOPS = 312 * 10**12 * self.parallel_config.tensor_parallel_size # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * self.parallel_config.tensor_parallel_size
+        if self.num_layers == 40: # for llama2-13B
+            self.M_W = 26 * 2
+            self.SLO = 0.130
+            self.epsilon = 20
+        elif self.num_layers == 80: # for llama2-70B
+            self.M_W = 70 * 2
+            self.SLO = 0.250
+            self.epsilon = 40
 
         h = self.hidden_size
         L = self.num_layers
@@ -1239,29 +1253,28 @@ class Scheduler:
         logger.info("Optimal cache layers:", final_l.astype(int))
         return final_b, final_l.astype(int)
     
-    def get_opt_bs_and_layers_2(self):
-
+    def get_opt_bs_and_layers(self):
         self.hidden_size=self.model_config.get_hidden_size()
         self.num_layers=self.cache_config.num_layers
         self.vocab_size=self.model_config.get_vocab_size()
-        self.FLOPS = 624 * 0.55 * 1000000000000 * 4 # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.55
-        # llama2-13b on 1GPU
-        # self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) 
-        # self.M_W = 26  # 26GB
-        # llama2-70b on 4GPUs
-        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * 4
-        self.M_W = 70 * 2  # 140GB 
-        # get request length of each request in the batch
+        self.FLOPS = 312 * 10**12 * self.parallel_config.tensor_parallel_size # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
+        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * self.parallel_config.tensor_parallel_size
+        if self.num_layers <= 40: # for llama2-13B
+            self.M_W = 13 * 2
+            self.SLO = 0.130
+            self.epsilon = 20
+            initial_guess = [128, 10]
+        elif self.num_layers == 80: # for llama2-70B
+            self.M_W = 70 * 2
+            self.SLO = 0.250
+            self.epsilon = 40
+            initial_guess = [300, 80]
 
         h = self.hidden_size
         L = self.num_layers
         V = self.vocab_size
         R = len(self.request_lengths)
         s_r = self.request_lengths
-        # self.epsilon = 20
-        self.epsilon = 50
-        # self.SLO = 0.130 // llama2-13b
-        self.SLO = 1.30
         st = time.time()
         # 预计算 A_r, B_r, C_r
         A = []
@@ -1316,18 +1329,14 @@ class Scheduler:
         # 变量边界
         bounds = [(1, R), (0, L)]  # b >= 1, l >= 0
 
-        # 初始猜测
-        # initial_guess = [20, 10] # llama2-13b
-        initial_guess = [300, 80] # llama2-70b
-
         # 调用优化器
         solution = minimize(
             objective,
             initial_guess,
-            method='L-BFGS-B',
+            method='Nelder-Mead',
             bounds=bounds,
             constraints=constraints,
-            options={'maxiter': 20, 'disp': False},
+            options={'maxiter': 15, 'disp': False},
         )
 
         et = time.time()
@@ -1337,9 +1346,8 @@ class Scheduler:
         final_l = np.round(l_opt).astype(int)
         final_l = np.maximum(final_l, 4 * np.ones(1)) // 4 * 4
         final_b = int(b_opt)
-        logger.info(f"Optimal b: {final_b}")
-        logger.info(f"Optimal l: {final_l}")
-        logger.info(f"Objective value: {solution.fun}, Iterations: {solution.nit}")
+        print(f"Optimal b: {final_b}, Optimal l: {final_l}, "
+              f"Objective value: {solution.fun}", f"iteration: {solution.nit}")
         return [int(final_b)], [final_l]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
