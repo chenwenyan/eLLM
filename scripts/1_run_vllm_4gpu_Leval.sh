@@ -10,8 +10,12 @@ export TORCH_USE_CUDA_DSA=1
 
 gpu_id=0,1,2,3
 tensor_parallel_size=4
-gpu_memory_utilizations=(0.6)
+gpu_memory_utilizations=(0.7)
 preemption_mode=recompute
+scheduling_policy=fcfs
+wt_weight=1.0
+flatten_layers=8
+store_cache_layers=0.1
 
 models=(meta-llama/Llama-2-70b-chat-hf)
 max_num_seqs=512

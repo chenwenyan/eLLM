@@ -12,6 +12,10 @@ gpu_id=3
 tensor_parallel_size=1
 gpu_memory_utilizations=(0.6)
 preemption_mode=recompute
+scheduling_policy=fcfs
+wt_weight=1.0
+flatten_layers=4
+store_cache_layers=0.1
 
 models=(meta-llama/Llama-2-13b-chat-hf)
 max_num_seqs=512
