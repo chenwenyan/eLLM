@@ -25,7 +25,7 @@ duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/1000)}' |
+    awk -F, '{print int($1/2000)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )

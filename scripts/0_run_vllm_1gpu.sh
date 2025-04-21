@@ -25,7 +25,7 @@ duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/1000)}' |
+    awk -F, '{print int($1/2000)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -40,6 +40,8 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
     num_prompt=$((num_prompt + request_rates[i]))
 done
 echo "num_prompt: $num_prompt"
+
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm'
 
 wait_for_server() {
     local port=$1
@@ -74,7 +76,7 @@ for run in {1..5}; do
             --wt-weight ${wt_weight} \
             --preemption-mode ${preemption_mode} \
             --flatten-layers ${flatten_layers} \
-            --disable-log-requests > "./${model_name}_server_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" & 
+            --disable-log-requests > "${log_path}/${model_name}_server_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" & 
         pid=$!
 
         if ! wait_for_server 8080; then
@@ -91,7 +93,7 @@ for run in {1..5}; do
             --request-rates "${request_rates_str}" \
             --num-prompts ${num_prompt} \
             --result-dir results/swap_recompute \
-            --endpoint /v1/completions >> "./${model_name}_client_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log"
+            --endpoint /v1/completions >> "${log_path}/${model_name}_client_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log"
 
         kill $pid || kill -9 $pid
         sleep 5
