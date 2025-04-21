@@ -80,38 +80,61 @@ def sample_sharegpt_requests(
 ) -> List[Tuple[str, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError("output_len too small")
+    
     # Load the dataset.
     with open(dataset_path) as f:
-        dataset = json.load(f)
+        org_dataset = json.load(f)
+    
     # Filter out the conversations with less than 2 turns.
-    dataset = [data for data in dataset if len(data["conversations"]) >= 2]
+    org_dataset = [data for data in org_dataset if len(data["conversations"]) >= 2]
+    
     # Only keep the first two turns of each conversation.
-    dataset = [(data["conversations"][0]["value"],
-                data["conversations"][1]["value"]) for data in dataset]
+    print(f"Number of conversations: {len(org_dataset)}")
 
+    dataset = [(data["conversations"][0]["value"],
+                data["conversations"][1]["value"]) for data in org_dataset]
+    
     # Shuffle the dataset.
     random.shuffle(dataset)
+    
     # Filter out sequences that are too long or too short
     filtered_dataset: List[Tuple[str, int, int]] = []
-    for i in range(len(dataset)):
-        if len(filtered_dataset) == num_requests:
-            break
-
-        # Tokenize the prompts and completions.
-        prompt = dataset[i][0]
-        prompt_token_ids = tokenizer(prompt).input_ids
-        completion = dataset[i][1]
-        completion_token_ids = tokenizer(completion).input_ids
-        prompt_len = len(prompt_token_ids)
-        output_len = len(completion_token_ids
-                         ) if fixed_output_len is None else fixed_output_len
-        if prompt_len < 4:
-            # Prune too short sequences.
-            continue
-        if prompt_len > 1024 or prompt_len + output_len > 2048:
-            # Prune too long sequences.
-            continue
-        filtered_dataset.append((prompt, prompt_len, output_len))
+    dataset_size = len(dataset)
+    
+    # Track the number of full cycles through the dataset
+    num_cycles = 0
+    
+    while len(filtered_dataset) < num_requests:
+        # If we've gone through the dataset once, reshuffle it
+        if len(filtered_dataset) % dataset_size == 0 and len(filtered_dataset) > 0:
+            dataset = [(data["conversations"][0]["value"],
+                       data["conversations"][1]["value"]) for data in org_dataset]
+            random.shuffle(dataset)
+            num_cycles += 1
+        
+        # Iterate through the dataset
+        for i in range(len(dataset)):
+            if len(filtered_dataset) == num_requests:
+                break
+            
+            # Tokenize the prompts and completions.
+            prompt = dataset[i][0]
+            prompt_token_ids = tokenizer(prompt).input_ids
+            completion = dataset[i][1]
+            completion_token_ids = tokenizer(completion).input_ids
+            prompt_len = len(prompt_token_ids)
+            output_len = len(completion_token_ids) if fixed_output_len is None else fixed_output_len
+            
+            if prompt_len < 4:
+                # Prune too short sequences.
+                continue
+            # if prompt_len > 1024 or prompt_len + output_len > 2048:
+                # Prune too long sequences.
+                # continue
+            
+            # filtered_dataset.append((prompt, prompt_len, output_len))
+            filtered_dataset.append((prompt[:4096-output_len], len(prompt), output_len))
+    
     return filtered_dataset
 
 
@@ -315,6 +338,7 @@ async def benchmark(
         raise ValueError(f"Unknown backend: {backend}")
 
     print("Starting initial single prompt test run...")
+    print(f'len(input_requests): {len(input_requests)}')
     test_prompt, test_prompt_len, test_output_len = input_requests[0]
     test_input = RequestFuncInput(
         model=model_id,
