@@ -67,12 +67,16 @@ for run in {1..5}; do
             --model ${model} \
             --port 8080 \
             --tensor-parallel-size ${tensor_parallel_size} \
-            --swap-space 40 \
+            --swap-space 4 \
             --enforce-eager \
             --gpu-memory-utilization ${gpu_memory_utilization} \
             --max-num-seqs ${max_num_seqs} \
+            --store-cache-layers ${store_cache_layers} \
             --preemption-mode ${preemption_mode} \
-            --with-slo \
+            --scheduling-policy ${scheduling_policy} \
+            --wt-weight ${wt_weight} \
+            --preemption-mode ${preemption_mode} \
+            --flatten-layers ${flatten_layers} \
             --disable-log-requests > "${log_path}/${model_name}_server_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" & 
         pid=$!
 
