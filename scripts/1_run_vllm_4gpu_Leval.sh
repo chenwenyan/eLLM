@@ -42,7 +42,7 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
 done
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/hcache-'${preemption_mode}/${data_name}
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm/'${data_name}
 if [ ! -d "${log_path}" ]; then
     mkdir -p ${log_path}
 fi

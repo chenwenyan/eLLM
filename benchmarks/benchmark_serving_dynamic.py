@@ -129,11 +129,21 @@ def sample_sharegpt_requests(
                 # Prune too short sequences.
                 continue
             # if prompt_len > 1024 or prompt_len + output_len > 2048:
-                # Prune too long sequences.
-                # continue
+            #     # Prune too long sequences.
+            #     continue
             
             # filtered_dataset.append((prompt, prompt_len, output_len))
-            filtered_dataset.append((prompt[:4096-output_len], len(prompt), output_len))
+            if "shareGPT" in dataset_path: 
+                if prompt_len > 1024 or prompt_len + output_len > 2048:
+                # Prune too long sequences.
+                    continue
+            if "shareGPT" not in dataset_path:    
+                filtered_dataset.append((prompt, prompt_len, output_len))
+
+            if "paper_assistant" in dataset_path and "13b" in args.model:  
+                filtered_dataset.append((prompt[:4096-output_len], len(prompt), output_len))
+            if "paper_assistant" in dataset_path and "70b" in args.model:  
+                filtered_dataset.append((prompt[:8192-output_len], len(prompt), output_len))
     
     return filtered_dataset
 

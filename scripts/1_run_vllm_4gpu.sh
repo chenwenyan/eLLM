@@ -25,7 +25,7 @@ duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/2000)}' |
+    awk -F, '{print int($1/4000)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -41,7 +41,7 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
 done
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm'
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm'/${data_name}
 
 wait_for_server() {
     local port=$1
