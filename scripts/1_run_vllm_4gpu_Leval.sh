@@ -26,7 +26,7 @@ duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/100)}' |
+    awk -F, '{print int($1/600)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -60,7 +60,7 @@ wait_for_server() {
     done
 }
 
-for run in {1..5}; do
+for run in {1..3}; do
     for model_idx in "${!models[@]}"; do
         model="${models[$model_idx]}"
         gpu_memory_utilization="${gpu_memory_utilizations[$model_idx]}"
@@ -70,7 +70,7 @@ for run in {1..5}; do
             --model ${model} \
             --port 8080 \
             --tensor-parallel-size ${tensor_parallel_size} \
-            --swap-space 4 \
+            --swap-space 40 \
             --enforce-eager \
             --gpu-memory-utilization ${gpu_memory_utilization} \
             --max-num-seqs ${max_num_seqs} \

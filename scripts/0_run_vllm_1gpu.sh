@@ -8,7 +8,7 @@ pip uninstall -y vllm-flash-attn
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 
-gpu_id=0
+gpu_id=1
 tensor_parallel_size=1
 gpu_memory_utilizations=(0.6)
 preemption_mode=recompute
@@ -19,13 +19,14 @@ store_cache_layers=0.1
 
 models=(meta-llama/Llama-2-13b-chat-hf)
 max_num_seqs=512
+data_name=sharegpt
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 
 duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/2000)}' |
+    awk -F, '{print int($1/2500)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -41,7 +42,7 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
 done
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm'
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm/'${data_name}
 
 wait_for_server() {
     local port=$1
@@ -56,7 +57,7 @@ wait_for_server() {
     done
 }
 
-for run in {1..5}; do
+for run in {1..3}; do
     for model_idx in "${!models[@]}"; do
         model="${models[$model_idx]}"
         gpu_memory_utilization="${gpu_memory_utilizations[$model_idx]}"
@@ -66,7 +67,7 @@ for run in {1..5}; do
             --model ${model} \
             --port 8080 \
             --tensor-parallel-size ${tensor_parallel_size} \
-            --swap-space 4 \
+            --swap-space 40 \
             --enforce-eager \
             --gpu-memory-utilization ${gpu_memory_utilization} \
             --max-num-seqs ${max_num_seqs} \
