@@ -686,7 +686,19 @@ class LlamaModel(nn.Module):
                 kv_caches[i],
                 attn_metadata,
                 residual,
-            ) 
+            )
+
+        # for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
+        for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), 10):
+            # recomputing kv_caches for the layers that are not stored
+            kv_cache = None
+            hidden_states, residual = self.layers[i](
+                positions,
+                hidden_states,
+                kv_cache,
+                attn_metadata,
+                residual,
+            )     
   
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states

@@ -26,7 +26,7 @@ duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/600)}' |
+    awk -F, '{print int($1/100)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -42,7 +42,7 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
 done
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/e2e/ellm/'${data_name}
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
 if [ ! -d "${log_path}" ]; then
     mkdir -p ${log_path}
 fi
@@ -60,7 +60,7 @@ wait_for_server() {
     done
 }
 
-for run in {1..3}; do
+for run in {1..1}; do
     for model_idx in "${!models[@]}"; do
         model="${models[$model_idx]}"
         gpu_memory_utilization="${gpu_memory_utilizations[$model_idx]}"

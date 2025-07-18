@@ -297,6 +297,8 @@ def calculate_metrics(
         else:
             actual_output_lens.append(0)
 
+    print(f'tpots: {tpots}')        
+
     if completed == 0:
         warnings.warn(
             "All requests failed. This is likely due to a misconfiguration "

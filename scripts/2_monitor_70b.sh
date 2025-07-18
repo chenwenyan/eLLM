@@ -8,25 +8,25 @@ pip uninstall -y vllm-flash-attn
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 
-gpu_id=2
-tensor_parallel_size=1
-gpu_memory_utilizations=(0.6)
+gpu_id=0,1,2,3
+tensor_parallel_size=4
+gpu_memory_utilizations=(0.7)
 preemption_mode=recompute
 scheduling_policy=fcfs
 wt_weight=1.0
-flatten_layers=4
+flatten_layers=8
 store_cache_layers=0.1
 
-models=(meta-llama/Llama-2-13b-chat-hf)
+models=(meta-llama/Llama-2-70b-chat-hf)
 max_num_seqs=512
-data_name=paper_assistant
-dataset_path=/nfs/dataset/LEval/LEval-data/Open-ended-tasks/${data_name}_transformed.json
+data_name=sharegpt
+dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 
 duration=60
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
 request_rates=(
     $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/100)}' |
+    awk -F, '{print int($1/2000)}' |
     sort -n | uniq -c |
     awk '{print $1}')
 )
@@ -41,11 +41,10 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
     num_prompt=$((num_prompt + request_rates[i]))
 done
 echo "num_prompt: $num_prompt"
-echo "avg request rate: $((num_prompt / duration))"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
-if [ ! -d "${log_path}" ]; then
-    mkdir -p ${log_path}
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/monitor/ellm/'${data_name}
+if [ ! -d "$log_path" ]; then
+    mkdir -p "$log_path"
 fi
 
 wait_for_server() {
@@ -90,6 +89,7 @@ for run in {1..1}; do
         fi
 
         sleep 1
+        nvidia-smi dmon -d 1 -c 1800 -s pucvmet -o DT -i ${gpu_id} > "${log_path}/${model_name}_gpu_monitor_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" 2>&1 &
 
         python3 ../benchmarks/benchmark_serving_dynamic.py \
             --model ${model} \
