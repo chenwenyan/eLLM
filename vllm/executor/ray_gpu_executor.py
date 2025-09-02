@@ -96,7 +96,7 @@ class RayGPUExecutor(DistributedGPUExecutor):
             else:
                 worker_module_name = "vllm.worker.worker"
                 worker_class_name = "Worker"
-
+            print(placement_group)
             worker = ray.remote(
                 num_cpus=0,
                 num_gpus=num_gpus,
@@ -131,7 +131,7 @@ class RayGPUExecutor(DistributedGPUExecutor):
         # Get the set of GPU IDs used on each node.
         worker_node_and_gpu_ids = self._run_workers("get_node_and_gpu_ids",
                                                     use_dummy_driver=True)
-
+        print(worker_node_and_gpu_ids)
         node_workers = defaultdict(list)
         node_gpus = defaultdict(list)
 
@@ -152,6 +152,7 @@ class RayGPUExecutor(DistributedGPUExecutor):
             "VLLM_TRACE_FUNCTION":
             str(envs.VLLM_TRACE_FUNCTION),
         }, ) for (node_id, _) in worker_node_and_gpu_ids]
+        print(all_args_to_update_environment_variables)
         self._run_workers("update_environment_variables",
                           all_args=all_args_to_update_environment_variables)
 

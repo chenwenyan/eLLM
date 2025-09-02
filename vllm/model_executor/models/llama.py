@@ -676,6 +676,8 @@ class LlamaModel(nn.Module):
         else:
             hidden_states = self.get_input_embeddings(input_ids)
         residual = None
+        import os
+        torch.cuda.device_count = lambda: len(list(os.environ["CUDA_VISIBLE_DEVICES"].split(",") if "CUDA_VISIBLE_DEVICES" in os.environ else []))
         print(f'kv_caches_length: {len(kv_caches)}, len(self.layers): {len(self.layers)}')
         for i in range(int(len(self.layers)*self.cache_config.store_cache_layers)):
         # for i in range(len(self.layers)):
@@ -687,7 +689,6 @@ class LlamaModel(nn.Module):
                 attn_metadata,
                 residual,
             )
-
         # for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), len(self.layers)):
         for i in range(int(len(self.layers)*self.cache_config.store_cache_layers), 10):
             # recomputing kv_caches for the layers that are not stored

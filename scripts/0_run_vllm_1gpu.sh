@@ -7,7 +7,7 @@ pip uninstall -y vllm-flash-attn
 
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
-
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
 gpu_id=1
 tensor_parallel_size=1
 gpu_memory_utilizations=(0.6)

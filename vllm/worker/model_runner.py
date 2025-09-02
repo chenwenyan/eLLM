@@ -144,7 +144,7 @@ class ModelRunner:
             )
 
         # print the model structure
-        print("model: ", self.model)    
+        # print("model: ", self.model)    
 
         self.model_memory_usage = m.consumed_memory
         logger.info("Loading model weights took %.4f GB",
