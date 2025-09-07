@@ -25,7 +25,7 @@ dataset_path=/nfs/dataset/${data_name}_transformed.json
 
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_count.csv'  
 n=60
-scale=1.5
+scale=2.5
 request_rates_str=$(sed -n "2,$((n+1))p" "$req_rates_csv" | cut -d',' -f2 | paste -sd ',' -)
 echo "$request_rates_str"
 
