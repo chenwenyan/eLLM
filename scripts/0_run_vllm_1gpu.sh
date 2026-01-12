@@ -1,48 +1,48 @@
 #!/bin/bash
 
-cd ../
-bash compile.sh
-cd scripts
-pip uninstall -y vllm-flash-attn
+# cd ../
+# bash compile.sh
+# cd scripts
+# pip uninstall -y vllm-flash-attn
 
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-gpu_id=1
-tensor_parallel_size=1
-gpu_memory_utilizations=(0.6)
+gpu_id=0,1,2,3
+tensor_parallel_size=4
+gpu_memory_utilizations=(0.9)
 preemption_mode=recompute
 scheduling_policy=fcfs
 wt_weight=1.0
 flatten_layers=4
 store_cache_layers=0.1
 
-models=(meta-llama/Llama-2-13b-chat-hf)
+models=(deepseek-ai/DeepSeek-V2)
+models=(meta-llama/Llama-2-70b-chat-hf)
 max_num_seqs=512
 data_name=sharegpt
 dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 
-duration=60
-req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_milliseconds.csv'  
-request_rates=(
-    $(tail -n +2 "$req_rates_csv" | cut -d',' -f4 |
-    awk -F, '{print int($1/2000)}' |
-    sort -n | uniq -c |
-    awk '{print $1}')
-)
-request_rates=("${request_rates[@]:0:$duration}")
-echo "request_rates=(${request_rates[@]})"
-# ，拼接request_rates为字符串
-request_rates_str=$(printf "%s," "${request_rates[@]}")
-request_rates_str=${request_rates_str%,} # 去掉最后一个逗号
+req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_count.csv'  
+n=60
+scale=1
 
-num_prompt=0
-for ((i=0; i<${#request_rates[@]}; i++)); do
-    num_prompt=$((num_prompt + request_rates[i]))
-done
+if (( n > 0 )); then
+    lines=$(sed -n "2,$((n+1))p" "$req_rates_csv")
+else
+    lines=$(tail -n +2 "$req_rates_csv")
+fi
+request_rates_str=$(echo "$lines" | cut -d',' -f2 \
+                    | awk -v s="$scale" '{print int($1*s+0.5)}' \
+                    | paste -sd ',' -)
+echo "after scaled: request_rates_str=${request_rates_str}"                    
+
+num_prompt=$(echo "$lines" | cut -d',' -f2 \
+             | awk -v s="$scale" '{sum+=int($1*s+0.5)} END{print sum}')
+
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm_1.2/'${data_name}
+log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm_ds/'${data_name}
 if [ ! -d "$log_path" ]; then
     mkdir -p "$log_path"
 fi
@@ -70,16 +70,12 @@ for run in {1..1}; do
             --model ${model} \
             --port 8080 \
             --tensor-parallel-size ${tensor_parallel_size} \
-            --swap-space 40 \
+            --trust-remote-code \
             --enforce-eager \
+            --worker-use-ray \
+            --load-format dummy \
             --gpu-memory-utilization ${gpu_memory_utilization} \
             --max-num-seqs ${max_num_seqs} \
-            --store-cache-layers ${store_cache_layers} \
-            --preemption-mode ${preemption_mode} \
-            --scheduling-policy ${scheduling_policy} \
-            --wt-weight ${wt_weight} \
-            --preemption-mode ${preemption_mode} \
-            --flatten-layers ${flatten_layers} \
             --disable-log-requests > "${log_path}/${model_name}_server_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" & 
         pid=$!
 
@@ -89,6 +85,12 @@ for run in {1..1}; do
         fi
 
         sleep 1
+        # sm_log="${log_path}/${model_name}_sm_util_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.csv"
+        # bash /root/workspace/vllm-dynamic/scripts/collect_sm_utilization.sh \
+        #     --pid "$pid" \
+        #     --gpu-id "$gpu_id" \
+        #     --out "$sm_log" &
+        # sm_pid=$!
 
         python3 ../benchmarks/benchmark_serving_dynamic.py \
             --model ${model} \
@@ -100,6 +102,7 @@ for run in {1..1}; do
             --endpoint /v1/completions >> "${log_path}/${model_name}_client_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log"
 
         kill $pid || kill -9 $pid
+        # wait $sm_pid || true
         sleep 5
     done
 done
