@@ -482,7 +482,7 @@ class LlamaModel(nn.Module):
         return self.embed_tokens(input_ids)
 
     def get_computation_cost(self, request_lens, recomputed_layers):
-        self.FLOPS = 624 * 0.55 * 1000000000000 * get_tensor_model_parallel_world_size()
+        self.FLOPS = 624 * 0.55 * 1000000000000 * get_tensor_model_parallel_world_size() * 1.0
         self.num_layers=self.layers
         self.hidden_size=self.config.hidden_size
         self.epsilon=20

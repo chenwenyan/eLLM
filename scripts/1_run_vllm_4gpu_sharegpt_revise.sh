@@ -24,7 +24,7 @@ dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_count.csv'  
 n=60
-scale=2
+scale=1
 request_rates_str=$(sed -n "2,$((n+1))p" "$req_rates_csv" | cut -d',' -f2 | paste -sd ',' -)
 echo "$request_rates_str"
 
@@ -42,7 +42,7 @@ echo "after scaled: request_rates_str=${request_rates_str}"
 num_prompt=$(echo "$lines" | cut -d',' -f2 \
              | awk -v s="$scale" '{sum+=int($1*s+0.5)} END{print sum}')
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
+log_path="/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm1.2/${data_name}"
 if [ ! -d "${log_path}" ]; then
     mkdir -p ${log_path}
 fi
