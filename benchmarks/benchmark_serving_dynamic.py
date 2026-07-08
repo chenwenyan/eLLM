@@ -140,10 +140,14 @@ def sample_sharegpt_requests(
                 else:
                     filtered_dataset.append((prompt, prompt_len, output_len))
 
-            if "paper_assistant" in dataset_path and "13b" in args.model:  
-                filtered_dataset.append((prompt[:4096-output_len], len(prompt[:4096-output_len]), output_len))
-            if "paper_assistant" in dataset_path and "70b" in args.model:  
-                filtered_dataset.append((prompt[:8192-output_len], len(prompt[:8192-output_len]), output_len))
+            if "paper_assistant" in dataset_path:
+                model_name = args.model.lower()
+                max_total_len = 8192 if "70b" in model_name else 4096
+                prompt_budget = max(4, max_total_len - output_len - 16)
+                if prompt_len > prompt_budget:
+                    prompt = tokenizer.decode(prompt_token_ids[:prompt_budget])
+                    prompt_len = prompt_budget
+                filtered_dataset.append((prompt, prompt_len, output_len))
     
     return filtered_dataset
 
@@ -254,11 +258,12 @@ async def get_request(
     for request in input_requests:
         yield request
 
+        if len(request_rates) > 0:
+            rate_idx = int((time.time() - st) // rate_change_interval)
+            request_rate = request_rates[rate_idx % len(request_rates)]
         if request_rate == float("inf"):
             # If the request rate is infinity, then we don't need to wait.
             continue
-        if len(request_rates) > 0:
-            request_rate = request_rates[((time.time()-st)//rate_change_interval)%len(request_rates)]
         # Sample the request interval from the exponential distribution.
         interval = np.random.exponential(1.0 / request_rate)
         # The next request will be sent after the interval.

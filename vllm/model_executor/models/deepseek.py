@@ -346,6 +346,7 @@ class DeepseekModel(nn.Module):
             for layer_idx in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.cache_config = cache_config
 
     def forward(
         self,
@@ -353,9 +354,26 @@ class DeepseekModel(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
         residual = None
+        if self.cache_config is not None and len(kv_caches) < len(self.layers):
+            store_layers = min(
+                len(kv_caches),
+                int(len(self.layers) * self.cache_config.store_cache_layers))
+            for i in range(store_layers):
+                layer = self.layers[i]
+                hidden_states, residual = layer(positions, hidden_states,
+                                                kv_caches[i], attn_metadata,
+                                                residual)
+            for i in range(store_layers, min(10, len(self.layers))):
+                layer = self.layers[i]
+                hidden_states, residual = layer(positions, hidden_states,
+                                                None, attn_metadata, residual)
+            hidden_states, _ = self.norm(hidden_states, residual)
+            return hidden_states
+
         for i in range(len(self.layers)):
             layer = self.layers[i]
             hidden_states, residual = layer(positions, hidden_states,
@@ -387,9 +405,10 @@ class DeepseekForCausalLM(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        seq_data_list: Optional[List] = None,
     ) -> torch.Tensor:
         hidden_states = self.model(input_ids, positions, kv_caches,
-                                   attn_metadata)
+                                   attn_metadata, seq_data_list)
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,
