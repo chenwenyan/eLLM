@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 cd ../
 bash compile.sh
 cd scripts
@@ -43,7 +45,7 @@ echo "after scaled: request_rates_str=${request_rates_str}"
 num_prompt=$(echo "$lines" | cut -d',' -f2 \
              | awk -v s="$scale" '{sum+=int($1*s+0.5)} END{print sum}')
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
+log_path="${SCRIPT_DIR}/dataset/slo/ellm/${data_name}"
 if [ ! -d "${log_path}" ]; then
     mkdir -p ${log_path}
 fi

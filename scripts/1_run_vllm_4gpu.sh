@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 cd ../
 bash compile.sh
 cd scripts
@@ -42,7 +44,7 @@ for ((i=0; i<${#request_rates[@]}; i++)); do
 done
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
+log_path="${SCRIPT_DIR}/dataset/slo/ellm/${data_name}"
 if [ ! -d "$log_path" ]; then
     mkdir -p "$log_path"
 fi

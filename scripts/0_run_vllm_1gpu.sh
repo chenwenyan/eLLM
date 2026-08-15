@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # cd ../
 # bash compile.sh
 # cd scripts
@@ -42,7 +44,7 @@ num_prompt=$(echo "$lines" | cut -d',' -f2 \
 
 echo "num_prompt: $num_prompt"
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm_ds/'${data_name}
+log_path="${SCRIPT_DIR}/dataset/slo/ellm_ds/${data_name}"
 if [ ! -d "$log_path" ]; then
     mkdir -p "$log_path"
 fi
@@ -86,7 +88,7 @@ for run in {1..1}; do
 
         sleep 1
         # sm_log="${log_path}/${model_name}_sm_util_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.csv"
-        # bash /root/workspace/vllm-dynamic/scripts/collect_sm_utilization.sh \
+        # bash "${SCRIPT_DIR}/collect_sm_utilization.sh" \
         #     --pid "$pid" \
         #     --gpu-id "$gpu_id" \
         #     --out "$sm_log" &

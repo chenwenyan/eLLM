@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 cd ../
 bash compile.sh
 cd scripts
@@ -26,7 +28,7 @@ dataset_path=/nfs/dataset/${data_name}_transformed.json
 req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_count.csv'  
 n=60
 
-log_path='/root/workspace/vllm-dynamic/scripts/dataset/slo/ellm/'${data_name}
+log_path="${SCRIPT_DIR}/dataset/slo/ellm/${data_name}"
 if [ ! -d "${log_path}" ]; then
     mkdir -p ${log_path}
 fi
@@ -111,4 +113,4 @@ for scale in "${scales[@]}"; do
             sleep 5
         done
     done
-done    
+done
