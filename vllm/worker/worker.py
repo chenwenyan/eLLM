@@ -1,7 +1,6 @@
 """A GPU worker class."""
 import gc
 import os
-import sys
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import torch
@@ -21,7 +20,6 @@ from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
 from vllm.worker.model_runner import ModelRunner
 from vllm.worker.worker_base import WorkerBase
-import logging
 
 
 class Worker(WorkerBase):
@@ -91,8 +89,6 @@ class Worker(WorkerBase):
         # Initialize gpu_cache as embedding models don't initialize kv_caches
         self.gpu_cache: Optional[List[torch.tensor]] = None
 
-        self.reshaped = False
-
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until
@@ -106,7 +102,6 @@ class Worker(WorkerBase):
             # This env var set by Ray causes exceptions with graph building.
             os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
             self.device = torch.device(f"cuda:{self.local_rank}")
-            print(self.device)
             torch.cuda.set_device(self.device)
 
             _check_if_gpu_supports_dtype(self.model_config.dtype)
@@ -165,28 +160,19 @@ class Worker(WorkerBase):
 
         # NOTE(woosuk): Here we assume that the other processes using the same
         # GPU did not change their memory usage during the profiling.
-        
+
         peak_memory = self.init_gpu_memory - free_gpu_memory
-        print(f'free_gpu_memory: {free_gpu_memory}, init_gpu_memory: {self.init_gpu_memory}, peak_memory: {peak_memory}')
-        
-        # peak_memory = torch.cuda.max_memory_allocated()
 
         assert peak_memory > 0, (
             "Error in memory profiling. This happens when the GPU memory was "
             "not properly cleaned up before initializing the vLLM instance.")
 
         cache_block_size = self.get_cache_block_size_bytes()
-        print(f'cache_block_size: {cache_block_size}')
         num_gpu_blocks = int(
             (total_gpu_memory * self.cache_config.gpu_memory_utilization -
              peak_memory) // cache_block_size)
         num_cpu_blocks = int(self.cache_config.swap_space_bytes //
                              cache_block_size)
-        
-        flatten_layers = self.cache_config.flatten_layers
-        print(f'num_layers: {self.cache_config.num_layers}, flatten_layers: {flatten_layers}')
-        # num_gpu_blocks = num_gpu_blocks * int(self.cache_config.num_layers / flatten_layers)
-        # num_cpu_blocks = num_cpu_blocks * int(self.cache_config.num_layers / flatten_layers)
 
         num_gpu_blocks = max(num_gpu_blocks, 0)
         num_cpu_blocks = max(num_cpu_blocks, 0)
@@ -194,7 +180,6 @@ class Worker(WorkerBase):
             self.model_runner.remove_all_loras()
         gc.collect()
         torch.cuda.empty_cache()
-        print(f'total_gpu_memory: {total_gpu_memory}, self.cache_config.gpu_memory_utilization: {self.cache_config.gpu_memory_utilization}, peak_memory: {peak_memory}, cache_block_size: {cache_block_size}, num_gpu_blocks: {num_gpu_blocks}, num_cpu_blocks: {num_cpu_blocks}')
         return num_gpu_blocks, num_cpu_blocks
 
     def initialize_cache(self, num_gpu_blocks: int,
@@ -218,7 +203,6 @@ class Worker(WorkerBase):
         self.cache_engine = CacheEngine(self.cache_config, self.model_config,
                                         self.parallel_config)
         self.gpu_cache = self.cache_engine.gpu_cache
-        print(f'initialize_cache: self.gpu_cache.length: {len(self.gpu_cache)}')
 
     def _warm_up_model(self) -> None:
         if not self.model_config.enforce_eager:
@@ -235,83 +219,60 @@ class Worker(WorkerBase):
     ) -> None:
         # Issue cache operations.
         if blocks_to_swap_in.numel() > 0:
-            # st = torch.cuda.Event(enable_timing=True)
-            # st.record()
-            # et = torch.cuda.Event(enable_timing=True)
             self.cache_engine.swap_in(blocks_to_swap_in)
-            # et.record()
-            # torch.cuda.synchronize()
-            # print(f'swap_in time: {st.elapsed_time(et)} ms')
         if blocks_to_swap_out.numel() > 0:
-            # st = torch.cuda.Event(enable_timing=True)
-            # st.record()
-            # et = torch.cuda.Event(enable_timing=True)
             self.cache_engine.swap_out(blocks_to_swap_out)
-            # et.record()
-            # torch.cuda.synchronize()
-            # print(f'swap_out time: {st.elapsed_time(et)} ms')
         if blocks_to_copy.numel() > 0:
             self.cache_engine.copy(blocks_to_copy)
-    
-    def get_used_layer_ids(self):
-        used_start_layers_ids = self.cache_engine.num_layers // self.cache_config.flatten_layers - 1
-        used_layer_ids = [[i + j * self.cache_config.flatten_layers for j in range(used_start_layers_ids + 1)] for i in range(self.cache_config.flatten_layers)]
-        # print(f'used_layer_ids: {used_layer_ids}')     
-        return used_layer_ids    
 
-    def reshape_kv_cache(self, used_layer_ids):
-        # print(f'shape of gpu_cache: {self.gpu_cache[0].shape}, len of gpu_cache: {len(self.gpu_cache)}')
-        reshaped_cache = []
-        for layer_ids in used_layer_ids:
-            reshaped_cache.append(torch.cat([self.gpu_cache[i] for i in layer_ids]).contiguous())
-        return reshaped_cache
-    
-    # def reshape_kv_cache(self, used_layer_ids):
-    #     reshaped_cache = []
-    #     for layer_ids in used_layer_ids:
-    #         # 预分配目标张量
-    #         first_cache = self.gpu_cache[layer_ids[0]]
-    #         total_size = sum(self.gpu_cache[i].size(0) for i in layer_ids)
-    #         out = torch.empty((total_size, *first_cache.shape[1:]), 
-    #                     dtype=first_cache.dtype, 
-    #                     device=first_cache.device)
-            
-    #         # 使用切片赋值避免中间结果
-    #         offset = 0
-    #         for i in layer_ids:
-    #             current = self.gpu_cache[i]
-    #             out[offset:offset+current.size(0)] = current
-    #             offset += current.size(0)
-            
-    #         reshaped_cache.append(out)
-    #     return reshaped_cache
+    def cache_swap_async(
+        self,
+        blocks_to_swap_in: torch.Tensor,
+        blocks_to_swap_out: torch.Tensor,
+        blocks_to_copy: torch.Tensor,
+        current_block_ids: torch.Tensor,
+    ) -> Tuple[Dict[int, torch.cuda.Event], Optional[torch.cuda.Event], bool]:
+        """Launch cache transfers without serializing the compute stream."""
+        swap_out_event = self.cache_engine.swap_out_async(blocks_to_swap_out)
+        wait_for_swap_out = False
+        swap_out_sources = None
+        if swap_out_event is not None:
+            swap_out_source_col = (1
+                                   if blocks_to_swap_out.shape[1] == 3 else 0)
+            swap_out_sources = blocks_to_swap_out[:, swap_out_source_col]
+            if blocks_to_swap_in.numel() > 0:
+                swap_in_destination_col = (
+                    2 if blocks_to_swap_in.shape[1] == 3 else 1)
+                swap_in_destinations = blocks_to_swap_in[
+                    :, swap_in_destination_col]
+                if torch.isin(swap_in_destinations,
+                              swap_out_sources).any().item():
+                    self.cache_engine.swap_in_stream.wait_event(
+                        swap_out_event)
+            if current_block_ids.numel() > 0:
+                wait_for_swap_out = torch.isin(
+                    current_block_ids, swap_out_sources).any().item()
+        swap_in_events = self.cache_engine.swap_in_async(blocks_to_swap_in)
+        if blocks_to_copy.numel() > 0:
+            current_stream = torch.cuda.current_stream()
+            for event in swap_in_events.values():
+                current_stream.wait_event(event)
+            if swap_out_event is not None and swap_out_sources is not None:
+                copy_destination_col = (
+                    2 if blocks_to_copy.shape[1] == 3 else 1)
+                copy_destinations = blocks_to_copy[:, copy_destination_col]
+                if torch.isin(copy_destinations,
+                              swap_out_sources).any().item():
+                    current_stream.wait_event(swap_out_event)
+            self.cache_engine.copy(blocks_to_copy)
+            swap_in_events = {}
+        return swap_in_events, swap_out_event, wait_for_swap_out
 
-    def split_gpu_cache(self, used_layer_ids, reshaped_caches):
-        split_nums = len(used_layer_ids[0])
-        for i in range(len(used_layer_ids)):
-            reshaped_cache=reshaped_caches[i]
-            split_caches = torch.split(reshaped_cache, split_nums)
-            for index, j in enumerate(used_layer_ids[i]):
-                self.gpu_cache[j] = split_caches[index]
-            
     @torch.inference_mode()
     def execute_model(
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[Union[SamplerOutput, PoolerOutput]]:
-        
-        if not self.reshaped:
-            st = torch.cuda.Event(enable_timing=True)
-            # st.record()
-            used_layer_ids = self.get_used_layer_ids()
-            self.gpu_cache = self.reshape_kv_cache(used_layer_ids)
-            print(f'After reshape_kv_cache->gpu_cache.length: {len(self.gpu_cache)}')
-            # et = torch.cuda.Event(enable_timing=True)
-            # et.record()
-            # torch.cuda.synchronize()
-            # print(f'gpu_cache reshape time: {st.elapsed_time(et)} ms')
-            self.reshaped = True
-    
         if not self.is_driver_worker:
             self._execute_model_non_driver()
             return []
@@ -324,45 +285,63 @@ class Worker(WorkerBase):
             # execution loop.
             broadcast_tensor_dict({}, src=0)
             return []
-        # print(f'After transfered->execute_model_req.total_block_ids: {execute_model_req.total_block_ids}, len(execute_model_req.total_block_ids): {len(execute_model_req.total_block_ids)}')
-
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
+        swap_in_width = (len(execute_model_req.blocks_to_swap_in[0])
+                         if execute_model_req.blocks_to_swap_in else 2)
+        swap_out_width = (len(execute_model_req.blocks_to_swap_out[0])
+                          if execute_model_req.blocks_to_swap_out else 2)
+        copy_width = (len(execute_model_req.blocks_to_copy[0])
+                      if execute_model_req.blocks_to_copy else 2)
         # `blocks_to_swap_in` and `blocks_to_swap_out` are cpu tensors.
         # they contain parameters to launch cudamemcpyasync.
         blocks_to_swap_in = torch.tensor(execute_model_req.blocks_to_swap_in,
                                          device="cpu",
-                                         dtype=torch.int64).view(-1, 2)
+                                         dtype=torch.int64).view(
+                                             -1, swap_in_width)
         blocks_to_swap_out = torch.tensor(execute_model_req.blocks_to_swap_out,
                                           device="cpu",
-                                          dtype=torch.int64).view(-1, 2)
+                                          dtype=torch.int64).view(
+                                              -1, swap_out_width)
         # `blocks_to_copy` is a gpu tensor. The src and tgt of
         # blocks to copy are in the same device, and `blocks_to_copy`
         # can be used directly within cuda kernels.
         blocks_to_copy = torch.tensor(execute_model_req.blocks_to_copy,
                                       device=self.device,
-                                      dtype=torch.int64).view(-1, 2)
+                                      dtype=torch.int64).view(-1, copy_width)
+        current_block_ids = torch.tensor(execute_model_req.total_block_ids,
+                                         device="cpu",
+                                         dtype=torch.int64)
         data: Dict[str, Any] = {
             "num_seq_groups": num_seq_groups,
             "blocks_to_swap_in": blocks_to_swap_in,
             "blocks_to_swap_out": blocks_to_swap_out,
             "blocks_to_copy": blocks_to_copy,
+            "current_block_ids": current_block_ids,
         }
         broadcast_tensor_dict(data, src=0)
 
-        self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
+        swap_in_events, swap_out_event, wait_for_swap_out = (
+            self.cache_swap_async(blocks_to_swap_in, blocks_to_swap_out,
+                                  blocks_to_copy, current_block_ids))
+        global_swap_in_event = swap_in_events.pop(-1, None)
+        if global_swap_in_event is not None:
+            torch.cuda.current_stream().wait_event(global_swap_in_event)
+        if wait_for_swap_out and swap_out_event is not None:
+            torch.cuda.current_stream().wait_event(swap_out_event)
         
         if num_seq_groups == 0:
+            if swap_out_event is not None:
+                swap_out_event.synchronize()
             return []
         
         output = self.model_runner.execute_model(seq_group_metadata_list,
-                                                    self.gpu_cache)
-
-
+                                                 self.gpu_cache,
+                                                 swap_in_events)
+        if swap_out_event is not None:
+            swap_out_event.synchronize()
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.
-        # self.split_gpu_cache(used_layer_ids, reshaped_gpu_cache)
-
         return [output]
 
     @torch.inference_mode()
@@ -372,7 +351,6 @@ class Worker(WorkerBase):
         You can stop the loop by executing a driver worker with an empty output.
         See `stop_remote_worker_execution_loop` for more details.
         """
-        print(f'start_worker_execution_loop')
         while self._execute_model_non_driver():
             pass
 
@@ -390,18 +368,25 @@ class Worker(WorkerBase):
         blocks_to_swap_in = data.get("blocks_to_swap_in")
         blocks_to_swap_out = data.get("blocks_to_swap_out")
         blocks_to_copy = data.get("blocks_to_copy")
-        self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
+        current_block_ids = data.get("current_block_ids")
+        swap_in_events, swap_out_event, wait_for_swap_out = (
+            self.cache_swap_async(blocks_to_swap_in, blocks_to_swap_out,
+                                  blocks_to_copy, current_block_ids))
+        global_swap_in_event = swap_in_events.pop(-1, None)
+        if global_swap_in_event is not None:
+            torch.cuda.current_stream().wait_event(global_swap_in_event)
+        if wait_for_swap_out and swap_out_event is not None:
+            torch.cuda.current_stream().wait_event(swap_out_event)
 
         # If there is no input, we don't need to execute the model.
         if num_seq_groups == 0:
+            if swap_out_event is not None:
+                swap_out_event.synchronize()
             return False
-        
-        # print(f'Worker _execute_model_non_driver, num_seq_groups: {num_seq_groups}')
-        used_layer_ids = self.get_used_layer_ids()
-        gpu_cache = self.reshape_kv_cache(used_layer_ids)
-        # print(f'Worker _execute_model_non_driver, self.gpu_cache.length: {len(gpu_cache)}')
 
-        self.model_runner.execute_model(None, gpu_cache)
+        self.model_runner.execute_model(None, self.gpu_cache, swap_in_events)
+        if swap_out_event is not None:
+            swap_out_event.synchronize()
         return True
 
     def add_lora(self, lora_request: LoRARequest) -> bool:

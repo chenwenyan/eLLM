@@ -91,7 +91,6 @@ class CachedBlockAllocator(BlockAllocatorBase):
 
     def allocate_block(self, block_hash: int,
                        num_hashed_tokens: int) -> PhysicalTokenBlock:
-        print(f'self.current_num_blocks is {self.current_num_blocks}, self.num_blocks is {self.num_blocks}')
         if self.current_num_blocks == self.num_blocks:
             block = self.evictor.evict()
             block.block_hash = block_hash
@@ -142,7 +141,6 @@ class CachedBlockAllocator(BlockAllocatorBase):
                 self.evictor.num_blocks)
 
     def get_num_total_blocks(self) -> int:
-        print(f'CachedBlockAllocator->self.num_blocks is {self.num_blocks}')
         return self.num_blocks
 
     def contains_block(self, block_hash: int) -> bool:
@@ -189,8 +187,7 @@ class UncachedBlockAllocator(BlockAllocatorBase):
                                        block_hash=-1,
                                        num_hashed_tokens=0)
             free_blocks.append(block)
-        print(f'init_free_blocks: num_blocks is {num_blocks}, len(free_blocks) is {len(free_blocks)}')
-        return free_blocks    
+        return free_blocks
 
     def allocate(self,
                  block_hash: Optional[int] = None,
@@ -286,13 +283,11 @@ class BlockSpaceManagerV1(BlockSpaceManager):
         num_required_blocks = len(seq.logical_token_blocks)
         # TODO: wychen
         num_required_blocks = int(seq_group.cache_layers / self.flatten_layers) * num_required_blocks 
-        print(f'num_required_blocks is {len(seq.logical_token_blocks)}, seq_group.cache_layers is {seq_group.cache_layers}, after flatten_layers is {num_required_blocks}')
 
         if self.block_sliding_window is not None:
             num_required_blocks = min(num_required_blocks,
                                       self.block_sliding_window)
         num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks()
-        print(f'num_free_gpu_blocks is {num_free_gpu_blocks}')
 
         # Use watermark to avoid frequent cache eviction.
         if (self.num_total_gpu_blocks - num_required_blocks < self.watermark_blocks): 

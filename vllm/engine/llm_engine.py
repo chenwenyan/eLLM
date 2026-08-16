@@ -682,7 +682,6 @@ class LLMEngine:
                 running_queue_size=scheduler_outputs.running_queue_size,
             )
             execute_model_req.total_block_ids = scheduler_outputs.total_block_ids
-            print("execute_model_req.total_block_ids: ", execute_model_req.total_block_ids)
             output = self.model_executor.execute_model(
                 execute_model_req=execute_model_req)
         else:

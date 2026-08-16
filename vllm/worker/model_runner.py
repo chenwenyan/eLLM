@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import Dict, List, NamedTuple, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 import numpy as np
 import torch
@@ -10,6 +10,7 @@ from vllm.attention import AttentionMetadata, get_attn_backend
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, ParallelConfig, SchedulerConfig,
                          VisionLanguageConfig)
+from vllm.core.ellm_cache import DEFAULT_LAYER_GROUP_SIZE
 from vllm.distributed import broadcast_tensor_dict
 from vllm.distributed.communication_op import graph_capture
 from vllm.logger import init_logger
@@ -23,6 +24,9 @@ from vllm.sequence import (MultiModalData, SamplerOutput, SequenceData,
                            SequenceGroupMetadata)
 from vllm.utils import (CudaMemoryProfiler, get_kv_cache_torch_dtype, is_hip,
                         is_pin_memory_available, make_tensor_with_pad)
+from vllm.worker.ellm_metadata import (
+    build_layerwise_attention_metadata,
+    build_layerwise_partial_recompute_metadata, get_block_table_logical_start)
 
 logger = init_logger(__name__)
 
@@ -142,9 +146,6 @@ class ModelRunner:
                 scheduler_config=self.scheduler_config,
                 cache_config=self.cache_config,
             )
-
-        # print the model structure
-        # print("model: ", self.model)    
 
         self.model_memory_usage = m.consumed_memory
         logger.info("Loading model weights took %.4f GB",
@@ -280,7 +281,6 @@ class ModelRunner:
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
-            # print(f'seq_group_metadata.cache_layers is {seq_group_metadata.cache_layers}')
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
@@ -378,7 +378,6 @@ class ModelRunner:
                 query_lens.append(query_len)
                 input_tokens.extend(tokens)
                 cache_layers.append(seq_group_metadata.cache_layers)
-                # TODO: wenyan
                 input_positions.extend(list(range(context_len, seq_len)))
                 lora_id = seq_group_metadata.lora_int_id
 
@@ -420,6 +419,10 @@ class ModelRunner:
 
                 # Compute the slot mapping.
                 block_table = seq_group_metadata.block_tables[seq_id]
+                logical_block_start = 0
+                if seq_group_metadata.layer_group_block_tables is not None:
+                    logical_block_start = get_block_table_logical_start(
+                        seq_data.get_len(), block_table, self.block_size)
 
                 # Mask the [0, start_idx) tokens of the prompt with
                 # _PAD_SLOT_ID, where start_idx is max(0, seq_len -
@@ -442,10 +445,10 @@ class ModelRunner:
                     if i < start_idx:
                         slot_mapping.append(_PAD_SLOT_ID)
                         continue
-                    # print(f'len(block_table): {len(block_table)}, i is {i}, self.block_size is {self.block_size}')
-                    # Wenyan
-                    block_number = block_table[i // (self.block_size)]
-                    block_offset = i % (self.block_size)
+                    logical_block = i // self.block_size
+                    block_number = block_table[
+                        logical_block - logical_block_start]
+                    block_offset = i % self.block_size
                     slot = block_number * self.block_size + block_offset
                     slot_mapping.append(slot)
 
@@ -581,8 +584,6 @@ class ModelRunner:
                 seq_start_loc=seq_start_loc,
                 data_type=kv_cache_dtype)
         else:
-            # print(f'self.attn_backend.get_name() is {self.attn_backend.get_name()}, and len(block_tables) is {len(block_tables)}, and len(seq_lens) is {len(seq_lens)}, and len(block_tables[0]) is {len(block_tables[0])}')
-            # print(F'_prepare_model_input: seq_lens: {seq_lens}')
             attn_metadata = self.attn_backend.make_metadata(
                 num_prefills=num_prefills,
                 slot_mapping=slot_mapping_tensor,
@@ -628,12 +629,13 @@ class ModelRunner:
     def prepare_input_tensors(
         self,
         seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
-    ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
-               Set[LoRARequest], LoRAMapping, torch.Tensor]:
-        # print(f'MODEL_RUNNER: prepare_input_tensors')
-        # print(f'MODEL_RUNNER: len(seq_group_metadata_list) is {len(seq_group_metadata_list)}, seq_group_metadata_list[0] is {seq_group_metadata_list[0].request_id}, seq_group_metadata_list[0].is_prompt is {seq_group_metadata_list[0].is_prompt}')
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[AttentionMetadata],
+               SamplingMetadata, Set[LoRARequest], Optional[LoRAMapping],
+               Optional[torch.Tensor], List[int]]:
         if self.is_driver_worker:
             assert seq_group_metadata_list is not None
+            self.ellm_partial_data = self._prepare_ellm_partial_data(
+                seq_group_metadata_list)
             # Prepare input tensors.
             (
                 input_tokens,
@@ -667,6 +669,7 @@ class ModelRunner:
                 "slot_mapping": slot_mapping,
                 "num_prefills": num_prefills,
                 "cache_layers": cache_layers,
+                "ellm_partial_data": self.ellm_partial_data,
             }
             if attn_metadata:
                 metadata_dict.update(attn_metadata.asdict_zerocopy())
@@ -681,6 +684,7 @@ class ModelRunner:
             lora_requests = metadata_dict.pop("lora_requests")
             multi_modal_input = metadata_dict.pop("multi_modal_input")
             cache_layers = metadata_dict.pop("cache_layers")
+            self.ellm_partial_data = metadata_dict.pop("ellm_partial_data")
             if metadata_dict:
                 attn_metadata = self.attn_backend.make_metadata(
                     **metadata_dict)
@@ -695,8 +699,46 @@ class ModelRunner:
 
         return (input_tokens, input_positions, attn_metadata,
                 sampling_metadata, lora_requests, lora_mapping,
-                multi_modal_input,cache_layers)
-    def generate_atten_metadata(self, attn_metadata: AttentionMetadata, cache_layer_index: int):
+                multi_modal_input, cache_layers)
+
+    def _prepare_ellm_partial_data(
+        self,
+        seq_group_metadata_list: List[SequenceGroupMetadata],
+    ) -> Optional[Dict[str, Any]]:
+        first_metadata = seq_group_metadata_list[0]
+        plans = first_metadata.ellm_layer_group_plans
+        if plans is None:
+            return None
+        recompute_seq_lens = first_metadata.ellm_recompute_seq_lens
+        assert recompute_seq_lens is not None
+        recompute_token_ids = []
+        recompute_positions = []
+        decode_seq_lens = []
+        seq_index = 0
+        for metadata in seq_group_metadata_list:
+            if metadata.is_prompt:
+                raise RuntimeError(
+                    "eLLM partial recompute cannot share a prefill batch")
+            for seq_data in metadata.seq_data.values():
+                num_recompute = recompute_seq_lens[seq_index]
+                recompute_token_ids.extend(
+                    seq_data.get_token_ids()[:num_recompute])
+                recompute_positions.extend(range(num_recompute))
+                decode_seq_lens.append(seq_data.get_len())
+                seq_index += 1
+        return {
+            "plans": plans,
+            "recompute_seq_lens": recompute_seq_lens,
+            "recompute_token_ids": recompute_token_ids,
+            "recompute_positions": recompute_positions,
+            "decode_seq_lens": decode_seq_lens,
+        }
+
+    def _make_layer_attention_metadata(
+        self,
+        attn_metadata: AttentionMetadata,
+        cache_layer_index: int,
+    ) -> AttentionMetadata:
         num_prefills = attn_metadata.num_prefills
         num_prefill_tokens = attn_metadata.num_prefill_tokens
         num_decode_tokens = attn_metadata.num_decode_tokens
@@ -712,32 +754,33 @@ class ModelRunner:
         seq_lens_tensor = attn_metadata.seq_lens_tensor[cache_layer_index]
         use_captured_graph = attn_metadata.use_cuda_graph
 
-        sub_attn_metadata = self.attn_backend.make_metadata(num_prefills=num_prefills,
-                slot_mapping=slot_mapping_tensor,
-                num_prefill_tokens=num_prefill_tokens,
-                num_decode_tokens=num_decode_tokens,
-                seq_lens=seq_lens,
-                seq_lens_tensor=seq_lens_tensor,
-                max_query_len=max_query_len,
-                total_seq_len=sum(seq_lens),
-                max_prefill_seq_len=max_prefill_seq_len,
-                max_decode_seq_len=max_decode_seq_len,
-                query_start_loc=query_start_loc,
-                seq_start_loc=seq_start_loc,
-                context_lens_tensor=context_lens_tensor,
-                block_tables=block_tables,
-                use_cuda_graph=use_captured_graph,)
-
-        return sub_attn_metadata
+        return self.attn_backend.make_metadata(
+            num_prefills=num_prefills,
+            slot_mapping=slot_mapping_tensor,
+            num_prefill_tokens=num_prefill_tokens,
+            num_decode_tokens=num_decode_tokens,
+            seq_lens=seq_lens,
+            seq_lens_tensor=seq_lens_tensor,
+            max_query_len=max_query_len,
+            total_seq_len=sum(seq_lens),
+            max_prefill_seq_len=max_prefill_seq_len,
+            max_decode_seq_len=max_decode_seq_len,
+            query_start_loc=query_start_loc,
+            seq_start_loc=seq_start_loc,
+            context_lens_tensor=context_lens_tensor,
+            block_tables=block_tables,
+            use_cuda_graph=use_captured_graph,
+        )
 
     @torch.inference_mode()
     def execute_model(
         self,
         seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
         kv_caches: List[torch.Tensor],
+        layer_group_events: Optional[Dict[int, torch.cuda.Event]] = None,
     ) -> Optional[SamplerOutput]:
         (input_tokens, input_positions, attn_metadata, sampling_metadata,
-         lora_requests, lora_mapping, multi_modal_input,cache_layers
+         lora_requests, lora_mapping, multi_modal_input, cache_layers
          ) = self.prepare_input_tensors(seq_group_metadata_list)
 
         if self.lora_config:
@@ -752,14 +795,14 @@ class ModelRunner:
         else:
             model_executable = self.model
         
-        # 新建一个字典，用于存储每一层的输入数据
         seq_data_list = []
         for cache_layer in cache_layers:
             cache_layer_index = cache_layers.index(cache_layer)
             cache_layer_index = cache_layer_index - 1
             sub_input_tokens = input_tokens[cache_layer_index]
             sub_input_positions = input_positions[cache_layer_index]
-            sub_attn_metadata = self.generate_atten_metadata(attn_metadata, cache_layer_index)
+            sub_attn_metadata = self._make_layer_attention_metadata(
+                attn_metadata, cache_layer_index)
             seq_data_list.append({
                 'layer_index': cache_layer_index,
                 'input_ids': sub_input_tokens,
@@ -770,17 +813,61 @@ class ModelRunner:
         execute_model_kwargs = {
             "input_ids": input_tokens,
             "positions": input_positions,
-            # TODO: concat kv_caches into 8 layers
-            "kv_caches": kv_caches, #8layer [[0,8,16,24],[1,9,17,25],...]
+            "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
             "seq_data_list": seq_data_list,
         }
-        # print(f'MODEL_RUNNER: attn_metadata.seq_lens is {attn_metadata.seq_lens}')
+        if layer_group_events:
+            execute_model_kwargs["layer_group_events"] = layer_group_events
+        if (self.parallel_config.tensor_parallel_size == 1
+                and seq_group_metadata_list is not None
+                and any(metadata.layer_group_block_tables is not None
+                        for metadata in seq_group_metadata_list)):
+            execute_model_kwargs["attn_metadata"] = (
+                build_layerwise_attention_metadata(
+                    attn_metadata,
+                    seq_group_metadata_list,
+                    self.model_config.get_num_layers(self.parallel_config),
+                    layer_group_size=DEFAULT_LAYER_GROUP_SIZE,
+                    block_size=self.block_size,
+                    device=self.device,
+                ))
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
-        hidden_states = model_executable(**execute_model_kwargs)
-        # TODO: split kv_caches into 32 layers
-        # kv_caches -> [0,1,2,3...]
+        partial_data = self.ellm_partial_data
+        if partial_data is not None:
+            if not hasattr(self.model, "forward_with_partial_recompute"):
+                raise NotImplementedError(
+                    "eLLM partial recompute requires model support")
+            recompute_seq_lens = partial_data["recompute_seq_lens"]
+            recompute_metadata, decode_metadata = (
+                build_layerwise_partial_recompute_metadata(
+                    partial_data["plans"],
+                    recompute_seq_lens,
+                    partial_data["decode_seq_lens"],
+                    self.model_config.get_num_layers(self.parallel_config),
+                    layer_group_size=DEFAULT_LAYER_GROUP_SIZE,
+                    device=self.device,
+                ))
+            hidden_states = self.model.forward_with_partial_recompute(
+                recompute_input_ids=torch.tensor(
+                    partial_data["recompute_token_ids"],
+                    dtype=torch.long,
+                    device=self.device),
+                recompute_positions=torch.tensor(
+                    partial_data["recompute_positions"],
+                    dtype=torch.long,
+                    device=self.device),
+                recompute_attn_metadata=recompute_metadata,
+                decode_input_ids=input_tokens,
+                decode_positions=input_positions,
+                kv_caches=kv_caches,
+                decode_attn_metadata=decode_metadata,
+                layer_group_events=layer_group_events,
+            )
+        else:
+            hidden_states = model_executable(**execute_model_kwargs)
+
         # Compute the logits.
         logits = self.model.compute_logits(hidden_states, sampling_metadata)
 

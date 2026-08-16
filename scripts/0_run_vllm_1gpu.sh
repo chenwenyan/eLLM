@@ -1,110 +1,108 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-# cd ../
-# bash compile.sh
-# cd scripts
-# pip uninstall -y vllm-flash-attn
-
-export CUDA_LAUNCH_BLOCKING=1
-export TORCH_USE_CUDA_DSA=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-gpu_id=0,1,2,3
-tensor_parallel_size=4
-gpu_memory_utilizations=(0.9)
-preemption_mode=recompute
-scheduling_policy=fcfs
-wt_weight=1.0
-flatten_layers=4
-store_cache_layers=0.1
+ELLM_HF_HOME="${ELLM_HF_HOME:-/tmp/ellm-hf-cache}"
+export HF_HOME="${ELLM_HF_HOME}"
 
-models=(deepseek-ai/DeepSeek-V2)
-models=(meta-llama/Llama-2-70b-chat-hf)
-max_num_seqs=512
-data_name=sharegpt
-dataset_path=/nfs/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
+GPU_IDS="${GPU_IDS:-0}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
+MODEL="${MODEL:-deepseek-ai/DeepSeek-V2-Lite}"
+LOAD_FORMAT="${LOAD_FORMAT:-dummy}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.70}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-4}"
+STORE_CACHE_LAYERS="${STORE_CACHE_LAYERS:-0.5}"
+FLATTEN_LAYERS="${FLATTEN_LAYERS:-4}"
+SCHEDULING_POLICY="${SCHEDULING_POLICY:-fcfs}"
+PREEMPTION_MODE="${PREEMPTION_MODE:-recompute}"
 
-req_rates_csv='/nfs/dataset/AzureLLMInferenceTrace/AzureLLMInferenceTrace_conv_1week_count.csv'  
-n=60
-scale=1
+DATASET_PATH="${DATASET_PATH:-/data/wenyan/datasets/ShareGPT_V3_unfiltered_cleaned_split.json}"
+NUM_PROMPTS="${NUM_PROMPTS:-4}"
+REQUEST_RATES="${REQUEST_RATES:-1}"
+SHAREGPT_OUTPUT_LEN="${SHAREGPT_OUTPUT_LEN:-4}"
+PORT="${PORT:-8080}"
+SERVER_TIMEOUT="${SERVER_TIMEOUT:-180}"
 
-if (( n > 0 )); then
-    lines=$(sed -n "2,$((n+1))p" "$req_rates_csv")
-else
-    lines=$(tail -n +2 "$req_rates_csv")
+if [[ ! -f "${DATASET_PATH}" ]]; then
+    echo "ShareGPT dataset not found: ${DATASET_PATH}" >&2
+    exit 1
 fi
-request_rates_str=$(echo "$lines" | cut -d',' -f2 \
-                    | awk -v s="$scale" '{print int($1*s+0.5)}' \
-                    | paste -sd ',' -)
-echo "after scaled: request_rates_str=${request_rates_str}"                    
 
-num_prompt=$(echo "$lines" | cut -d',' -f2 \
-             | awk -v s="$scale" '{sum+=int($1*s+0.5)} END{print sum}')
+MODEL_NAME="${MODEL//\//_}"
+LOG_DIR="${LOG_DIR:-${SCRIPT_DIR}/dataset/slo/ellm_ds/sharegpt}"
+RESULT_DIR="${RESULT_DIR:-${REPO_ROOT}/results/sharegpt}"
+mkdir -p "${LOG_DIR}" "${RESULT_DIR}" "${HF_HOME}"
 
-echo "num_prompt: $num_prompt"
+SERVER_LOG="${LOG_DIR}/${MODEL_NAME}_server_${NUM_PROMPTS}_${TENSOR_PARALLEL_SIZE}gpu.log"
+CLIENT_LOG="${LOG_DIR}/${MODEL_NAME}_client_${NUM_PROMPTS}_${TENSOR_PARALLEL_SIZE}gpu.log"
 
-log_path="${SCRIPT_DIR}/dataset/slo/ellm_ds/${data_name}"
-if [ ! -d "$log_path" ]; then
-    mkdir -p "$log_path"
-fi
+server_pid=""
+cleanup() {
+    if [[ -n "${server_pid}" ]] && kill -0 "${server_pid}" 2>/dev/null; then
+        kill "${server_pid}" 2>/dev/null || true
+        wait "${server_pid}" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
 
 wait_for_server() {
-    local port=$1
-    while true; do
-        if netstat -tulnp | grep -q "${port}"; then
-            echo "server is running on port ${port}"
-            break
-        else
-            echo "server is not running on port ${port}"
-            sleep 5
+    local deadline=$((SECONDS + SERVER_TIMEOUT))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "${server_pid}" 2>/dev/null; then
+            echo "vLLM server exited before becoming ready" >&2
+            tail -n 80 "${SERVER_LOG}" >&2 || true
+            return 1
         fi
+        if curl --fail --silent "http://127.0.0.1:${PORT}/health" \
+                >/dev/null; then
+            return 0
+        fi
+        sleep 2
     done
+    echo "Timed out waiting for vLLM server on port ${PORT}" >&2
+    tail -n 80 "${SERVER_LOG}" >&2 || true
+    return 1
 }
 
-for run in {1..1}; do
-    for model_idx in "${!models[@]}"; do
-        model="${models[$model_idx]}"
-        gpu_memory_utilization="${gpu_memory_utilizations[$model_idx]}"
-        model_name=$(echo "$model" | tr '/' '_')
+echo "Starting ${MODEL} on GPU(s) ${GPU_IDS}"
+CUDA_VISIBLE_DEVICES="${GPU_IDS}" python -m vllm.entrypoints.openai.api_server \
+    --model "${MODEL}" \
+    --port "${PORT}" \
+    --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
+    --trust-remote-code \
+    --enforce-eager \
+    --load-format "${LOAD_FORMAT}" \
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
+    --max-num-seqs "${MAX_NUM_SEQS}" \
+    --store-cache-layers "${STORE_CACHE_LAYERS}" \
+    --flatten-layers "${FLATTEN_LAYERS}" \
+    --scheduling-policy "${SCHEDULING_POLICY}" \
+    --preemption-mode "${PREEMPTION_MODE}" \
+    --disable-log-requests >"${SERVER_LOG}" 2>&1 &
+server_pid=$!
 
-        CUDA_VISIBLE_DEVICES=${gpu_id} python3 -m vllm.entrypoints.openai.api_server \
-            --model ${model} \
-            --port 8080 \
-            --tensor-parallel-size ${tensor_parallel_size} \
-            --trust-remote-code \
-            --enforce-eager \
-            --worker-use-ray \
-            --load-format dummy \
-            --gpu-memory-utilization ${gpu_memory_utilization} \
-            --max-num-seqs ${max_num_seqs} \
-            --disable-log-requests > "${log_path}/${model_name}_server_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log" & 
-        pid=$!
+wait_for_server
+echo "Server ready; running ${NUM_PROMPTS} ShareGPT requests"
 
-        if ! wait_for_server 8080; then
-            kill -9 $pid
-            exit 1
-        fi
+python "${REPO_ROOT}/benchmarks/benchmark_serving_dynamic.py" \
+    --backend vllm \
+    --host 127.0.0.1 \
+    --port "${PORT}" \
+    --endpoint /v1/completions \
+    --dataset-name sharegpt \
+    --dataset-path "${DATASET_PATH}" \
+    --model "${MODEL}" \
+    --trust-remote-code \
+    --request-rates "${REQUEST_RATES}" \
+    --num-prompts "${NUM_PROMPTS}" \
+    --sharegpt-output-len "${SHAREGPT_OUTPUT_LEN}" \
+    --save-result \
+    --result-dir "${RESULT_DIR}" 2>&1 | tee "${CLIENT_LOG}"
 
-        sleep 1
-        # sm_log="${log_path}/${model_name}_sm_util_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.csv"
-        # bash "${SCRIPT_DIR}/collect_sm_utilization.sh" \
-        #     --pid "$pid" \
-        #     --gpu-id "$gpu_id" \
-        #     --out "$sm_log" &
-        # sm_pid=$!
-
-        python3 ../benchmarks/benchmark_serving_dynamic.py \
-            --model ${model} \
-            --port 8080 \
-            --dataset ${dataset_path} \
-            --request-rates "${request_rates_str}" \
-            --num-prompts ${num_prompt} \
-            --result-dir results/swap_recompute \
-            --endpoint /v1/completions >> "${log_path}/${model_name}_client_${num_prompt}_${preemption_mode}_${tensor_parallel_size}gpu.log"
-
-        kill $pid || kill -9 $pid
-        # wait $sm_pid || true
-        sleep 5
-    done
-done
+echo "Server log: ${SERVER_LOG}"
+echo "Client log: ${CLIENT_LOG}"
+echo "Results: ${RESULT_DIR}"

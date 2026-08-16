@@ -3,7 +3,7 @@ import copy
 import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from vllm.block import LogicalTokenBlock
 from vllm.lora.request import LoRARequest
@@ -637,6 +637,10 @@ class SequenceGroupMetadata:
         state: Optional[SequenceGroupState] = None,
         multi_modal_data: Optional[MultiModalData] = None,
         cache_layers: Optional[int] = 10,
+        layer_group_block_tables: Optional[Dict[
+            int, List[List[int]]]] = None,
+        ellm_layer_group_plans: Optional[Any] = None,
+        ellm_recompute_seq_lens: Optional[List[int]] = None,
     ) -> None:
         self.request_id = request_id
         self.is_prompt = is_prompt
@@ -664,6 +668,9 @@ class SequenceGroupMetadata:
                 self._token_chunk_size = 1
 
         self.cache_layers = cache_layers       
+        self.layer_group_block_tables = layer_group_block_tables
+        self.ellm_layer_group_plans = ellm_layer_group_plans
+        self.ellm_recompute_seq_lens = ellm_recompute_seq_lens
 
     @property
     def lora_int_id(self) -> int:

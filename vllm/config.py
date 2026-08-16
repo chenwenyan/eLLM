@@ -240,6 +240,14 @@ class ModelConfig:
         return self.hf_text_config.hidden_size
 
     def get_head_size(self) -> int:
+        if self.hf_text_config.model_type == "deepseek_v2":
+            qk_head_dim = (self.hf_text_config.qk_nope_head_dim +
+                           self.hf_text_config.qk_rope_head_dim)
+            for supported_head_size in (64, 80, 96, 112, 128, 256):
+                if qk_head_dim <= supported_head_size:
+                    return supported_head_size
+            raise ValueError(
+                f"Unsupported DeepSeek-V2 head size: {qk_head_dim}.")
         if hasattr(self.hf_text_config, "head_dim"):
             return self.hf_text_config.head_dim
         # FIXME(woosuk): This may not be true for all models.
@@ -1254,7 +1262,10 @@ class EngineConfig:
         """
         self.model_config.verify_with_parallel_config(self.parallel_config)
         self.cache_config.verify_with_parallel_config(self.parallel_config)
-        self.cache_config.num_layers = self.model_config.get_num_layers(self.parallel_config)
+        self.cache_config.num_layers = self.model_config.get_num_layers(
+            self.parallel_config)
+        if self.cache_config.flatten_layers is None:
+            self.cache_config.flatten_layers = self.cache_config.num_layers
 
         if self.lora_config:
             self.lora_config.verify_with_model_config(self.model_config)

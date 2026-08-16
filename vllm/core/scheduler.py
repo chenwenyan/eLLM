@@ -4,23 +4,22 @@ import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from vllm.config import CacheConfig, LoRAConfig, SchedulerConfig, ModelConfig, ParallelConfig
+import numpy as np
+from scipy.optimize import minimize
+
+from vllm.config import (CacheConfig, LoRAConfig, ModelConfig, ParallelConfig,
+                         SchedulerConfig)
+from vllm.core.ellm_cache import DEFAULT_LAYER_GROUP_SIZE
+from vllm.core.ellm_policy import select_ellm_policy
 from vllm.core.interfaces import AllocStatus, BlockSpaceManager
 from vllm.core.policy import Policy, PolicyFactory
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.sequence import (Sequence, SequenceData, SequenceGroup,
                            SequenceGroupMetadata, SequenceStatus)
-
-import torch
-
-import cvxpy as cp
-import numpy as np
-from scipy.optimize import minimize
-import time
-from functools import partial
 
 logger = init_logger(__name__)
 
@@ -291,6 +290,9 @@ class Scheduler:
             version = "v2"
         if self.scheduler_config.embedding_mode:
             version = "embedding"
+        if (not self.scheduler_config.embedding_mode
+                and self.cache_config.store_cache_layers < 1.0):
+            version = "ellm"
 
         # logger.info(f"Using block manager version: {version}")
         BlockSpaceManagerImpl = BlockSpaceManager.get_block_space_manager_class(
@@ -299,14 +301,21 @@ class Scheduler:
         # Create the block space manager.
         # set dynamic cache layer ratio by various request loads
         # set flatten layers by num_layers
-        logger.info(f"self.cache_config.num_layers is {self.cache_config.num_layers}")
-        self.block_manager = BlockSpaceManagerImpl(
+        logger.info("KV cache has %d model layers",
+                    self.cache_config.num_layers)
+        block_manager_kwargs = dict(
             block_size=self.cache_config.block_size,
             num_gpu_blocks=self.cache_config.num_gpu_blocks,
             num_cpu_blocks=self.cache_config.num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching,
             flatten_layers=self.cache_config.flatten_layers)
+        if version == "ellm":
+            block_manager_kwargs.update(
+                num_layers=self.cache_config.num_layers,
+                layer_group_size=DEFAULT_LAYER_GROUP_SIZE,
+            )
+        self.block_manager = BlockSpaceManagerImpl(**block_manager_kwargs)
 
         # Sequence groups in the WAITING state.
         # Contain new prefill or preempted requests.
@@ -517,7 +526,7 @@ class Scheduler:
         # logger.info(f"total_block_ids length: {len(total_block_ids)}")
         # logger.info(f"num_blocks: {len(set(total_block_ids))}, token_num: {sum(self.request_lengths)}")  
 
-        logger.info(f"swapped_out_tokens: {swapped_out_tokens}")
+        logger.debug("Swapped out %d tokens", swapped_out_tokens)
 
         return running_queue, SchedulerRunningOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -635,7 +644,7 @@ class Scheduler:
             budget.add_num_seqs(seq_group.request_id, num_new_seqs)
 
         swapped_queue.extendleft(leftover_swapped)
-        logger.info(f"swapped_in_tokens: {swapped_in_tokens}")
+        logger.debug("Swapped in %d tokens", swapped_in_tokens)
 
         return swapped_queue, SchedulerSwappedInOutputs(
             decode_seq_groups=decode_seq_groups,
@@ -803,7 +812,10 @@ class Scheduler:
         req_num = len(self.running) + len(self.waiting) 
         self.request_lengths = [len(self.all_requests[i].prompt) for i in range(req_num)]
 
-        if len(self.running) + len(self.waiting) <= 1:
+        if self.cache_config.store_cache_layers >= 1.0:
+            self.batch_sizes_arr = [self.scheduler_config.max_num_seqs]
+            self.cache_layers_arr = [self.cache_config.num_layers]
+        elif len(self.running) + len(self.waiting) <= 1:
             self.batch_sizes_arr = [self.scheduler_config.max_num_seqs]
             self.cache_layers_arr = [int(self.cache_config.num_layers/2)]
         else:
@@ -830,7 +842,7 @@ class Scheduler:
         max_num_seqs = self.batch_sizes_arr.popleft()
         self.cache_layers = self.cache_layers_arr.popleft()
 
-        logger.info(f"max_num_seqs: {max_num_seqs}")
+        logger.debug("Scheduling at most %d sequences", max_num_seqs)
         budget = SchedulingBudget(
             token_budget=self.scheduler_config.max_num_batched_tokens,
             max_num_seqs=max_num_seqs,
@@ -1254,101 +1266,25 @@ class Scheduler:
         return final_b, final_l.astype(int)
     
     def get_opt_bs_and_layers(self):
-        self.hidden_size=self.model_config.get_hidden_size()
-        self.num_layers=self.cache_config.num_layers
-        self.vocab_size=self.model_config.get_vocab_size()
-        self.FLOPS = 312 * 10**12 * self.parallel_config.tensor_parallel_size # 混合精度（Tensor Core）FP16, 假设GPU利用率为0.35
-        self.M_G = 80 * (self.cache_config.gpu_memory_utilization-0.1) * self.parallel_config.tensor_parallel_size
-        if self.num_layers <= 40: # for llama2-13B
-            self.M_W = 13 * 2
-            self.SLO = 0.130
-            self.epsilon = 20
-            initial_guess = [128, 10]
-        elif self.num_layers == 80: # for llama2-70B
-            self.M_W = 70 * 2
-            self.SLO = 0.250
-            self.epsilon = 40
-            initial_guess = [300, 80]
-
-        h = self.hidden_size
-        L = self.num_layers
-        V = self.vocab_size
-        R = len(self.request_lengths)
-        s_r = self.request_lengths
-        st = time.time()
-        # 预计算 A_r, B_r, C_r
-        A = []
-        B = []
-        C = []
-        for s_r in self.request_lengths:
-            a = 24 * s_r * h**2 + 4 * s_r**2 * h
-            b = 24 * h**2 + 4 * h - 20 * s_r * h**2 - 4 * s_r**2 * h
-            c = 2 * s_r * h * V + 2 * h * V + 2 * self.epsilon
-            A.append(a)
-            B.append(b)
-            C.append(c)
-
-        # 目标函数
-        def objective(vars):
-            b, l = vars
-            if b < 1 or b > R:
-                return np.inf  # 无效的 b 值
-            sum_AL = sum(A[r] * L for r in range(int(b)))
-            sum_BL = sum(B[r] * l for r in range(int(b)))
-            sum_C = sum(C[r] for r in range(int(b)))
-            numerator = sum_AL + sum_BL + sum_C
-            return numerator / (b * self.FLOPS)
-
-        # 约束条件
-        def constraint1(vars):
-            b, l = vars
-            sum_AL = sum(A[r] * L for r in range(int(b)))
-            sum_BL = sum(B[r] * l for r in range(int(b)))
-            sum_C = sum(C[r] for r in range(int(b)))
-            return (sum_AL + sum_BL + sum_C) / self.FLOPS - self.SLO  # 应小于等于 0
-
-        def constraint2(vars):
-            b, l = vars
-            sum_lhs = sum(2 * l * self.request_lengths[r] * h for r in range(int(b))) + self.M_W
-            return sum_lhs - self.M_G  # 应小于等于 0
-
-        def constraint3(vars):
-            return vars[1] - L  # l <= L
-
-        def constraint4(vars):
-            return vars[0] - R  # b <= R
-
-        # 定义约束字典
-        constraints = [
-            {'type': 'ineq', 'fun': lambda vars: -constraint1(vars)},  # <= SLO
-            {'type': 'ineq', 'fun': lambda vars: -constraint2(vars)},  # <= M_G
-            {'type': 'ineq', 'fun': constraint3},  # l <= L
-            {'type': 'ineq', 'fun': constraint4},  # b <= R
-        ]
-
-        # 变量边界
-        bounds = [(1, R), (0, L)]  # b >= 1, l >= 0
-
-        # 调用优化器
-        solution = minimize(
-            objective,
-            initial_guess,
-            method='Nelder-Mead',
-            bounds=bounds,
-            constraints=constraints,
-            options={'maxiter': 15, 'disp': False},
+        decision = select_ellm_policy(
+            request_lengths=self.request_lengths,
+            max_batch_size=self.scheduler_config.max_num_seqs,
+            num_layers=self.cache_config.num_layers,
+            num_gpu_blocks=self.cache_config.num_gpu_blocks,
+            block_size=self.cache_config.block_size,
+            layer_group_size=DEFAULT_LAYER_GROUP_SIZE,
         )
-
-        et = time.time()
-        logger.info(f"Solve the Optimization Problem Time is: {(et - st)*1000} ms")
-        # 输出结果
-        b_opt, l_opt = solution.x
-        final_l = np.round(l_opt).astype(int)
-        final_l = np.maximum(final_l, 4 * np.ones(1)) // 4 * 4
-        final_b = int(b_opt)
-        print(f"Optimal b: {final_b}, Optimal l: {final_l}, "
-              f"Objective value: {solution.fun}", f"iteration: {solution.nit}")
-        return [int(final_b)], [final_l]
+        logger.info(
+            "eLLM policy selected batch=%d cached_layers=%d "
+            "recompute_layers=%d resident_token_layers=%d "
+            "temporary_token_layers=%d",
+            decision.batch_size,
+            decision.cached_layers,
+            decision.recompute_layers,
+            decision.resident_token_layers,
+            decision.temporary_token_layers,
+        )
+        return [decision.batch_size], [decision.cached_layers]
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs]:
         # Schedule sequence groups.
@@ -1370,11 +1306,20 @@ class Scheduler:
             seq_data: Dict[int, SequenceData] = {}
             # seq_id -> physical block numbers
             block_tables: Dict[int, List[int]] = {}
+            layer_group_block_tables: Dict[int, List[List[int]]] = {}
 
             for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
                 seq_id = seq.seq_id
                 seq_data[seq_id] = seq.data
+                evict_prefix = getattr(
+                    self.block_manager, "evict_to_cached_layer_ratio", None)
+                if not seq_group.is_prefill() and evict_prefix is not None:
+                    evict_prefix(seq, self.cache_layers)
                 block_tables[seq_id] = self.block_manager.get_block_table(seq)
+                get_layer_tables = getattr(
+                    self.block_manager, "get_layer_group_block_tables", None)
+                if get_layer_tables is not None:
+                    layer_group_block_tables[seq_id] = get_layer_tables(seq)
                 self.block_manager.access_all_blocks_in_seq(seq, now)
 
             common_computed_block_nums = (
@@ -1418,11 +1363,37 @@ class Scheduler:
                 multi_modal_data=seq_group.multi_modal_data
                 if scheduler_outputs.num_prefill_groups > 0 else None,
                 cache_layers=self.cache_layers,
+                layer_group_block_tables=(layer_group_block_tables
+                                          if layer_group_block_tables else
+                                          None),
             )
             seq_group.update_cache_layers(self.cache_layers)
             seq_group_metadata.update_cache_layers(self.cache_layers)
             # logger.info(f"seq_group.request_id: {seq_group.request_id}, seq_group.cache_layers: {seq_group.cache_layers}")
             seq_group_metadata_list.append(seq_group_metadata)
+
+        build_partial_plans = getattr(
+            self.block_manager, "build_partial_recompute_plans", None)
+        get_num_evicted = getattr(
+            self.block_manager, "get_num_evicted_tokens", None)
+        decode_metadata = [
+            metadata for metadata in seq_group_metadata_list
+            if not metadata.is_prompt
+        ]
+        if (build_partial_plans is not None and get_num_evicted is not None
+                and decode_metadata):
+            decode_seq_ids = [
+                seq_id for metadata in decode_metadata
+                for seq_id in metadata.seq_data
+            ]
+            recompute_seq_lens = [
+                get_num_evicted(seq_id) for seq_id in decode_seq_ids
+            ]
+            if any(recompute_seq_lens):
+                plans = build_partial_plans(decode_seq_ids)
+                for metadata in decode_metadata:
+                    metadata.ellm_layer_group_plans = plans
+                    metadata.ellm_recompute_seq_lens = recompute_seq_lens
 
         # Now that the batch has been created, we can assume all blocks in the
         # batch will have been computed before the next scheduling invocation.
@@ -1566,7 +1537,8 @@ class Scheduler:
         # st_record.record()
         mapping = self.block_manager.swap_in(seq_group)
         blocks_to_swap_in.extend(mapping)
-        total_block_ids.extend([block_id for _, block_id in mapping])
+        total_block_ids.extend(mapping_entry[-1]
+                               for mapping_entry in mapping)
         for seq in seq_group.get_seqs(status=SequenceStatus.SWAPPED):
             seq.status = SequenceStatus.RUNNING
         # en_record.record()

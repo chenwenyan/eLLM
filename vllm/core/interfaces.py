@@ -35,6 +35,10 @@ class BlockSpaceManager(ABC):
             from vllm.core.block_manager_v2 import BlockSpaceManagerV2
             return BlockSpaceManagerV2
 
+        if version == "ellm":
+            from vllm.core.ellm_block_manager import ELLMBlockSpaceManager
+            return ELLMBlockSpaceManager
+
         if version == "embedding":
             from vllm.core.embedding_model_block_manager import (
                 EmbeddingModelBlockSpaceManager)

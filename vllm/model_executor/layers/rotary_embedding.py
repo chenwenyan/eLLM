@@ -333,6 +333,13 @@ def _yarn_get_mscale(scale: float = 1) -> float:
     return 0.1 * math.log(scale) + 1.0
 
 
+def _deepseek_yarn_get_mscale(scale: float = 1,
+                              mscale: float = 1) -> float:
+    if scale <= 1:
+        return 1.0
+    return 0.1 * mscale * math.log(scale) + 1.0
+
+
 class YaRNScalingRotaryEmbedding(RotaryEmbedding):
     """RotaryEmbedding extended with YaRN method.
 
@@ -392,6 +399,40 @@ class YaRNScalingRotaryEmbedding(RotaryEmbedding):
         sin = (freqs.sin() * self.mscale)
         cache = torch.cat((cos, sin), dim=-1)
         return cache
+
+
+class DeepseekYaRNScalingRotaryEmbedding(YaRNScalingRotaryEmbedding):
+    """DeepSeek-V2 YaRN with independent magnitude scaling controls."""
+
+    def __init__(
+        self,
+        head_size: int,
+        rotary_dim: int,
+        max_position_embeddings: int,
+        base: int,
+        is_neox_style: bool,
+        scaling_factor: float,
+        dtype: torch.dtype,
+        *,
+        extrapolation_factor: float = 1,
+        attn_factor: float = 1,
+        beta_fast: int = 32,
+        beta_slow: int = 1,
+        mscale: float = 1,
+        mscale_all_dim: float = 0,
+    ) -> None:
+        self.scaling_factor = scaling_factor
+        self.extrapolation_factor = extrapolation_factor
+        self.attn_factor = attn_factor
+        self.beta_fast = beta_fast
+        self.beta_slow = beta_slow
+        self.mscale = float(
+            _deepseek_yarn_get_mscale(scaling_factor, float(mscale)) /
+            _deepseek_yarn_get_mscale(scaling_factor,
+                                      float(mscale_all_dim)) * attn_factor)
+        RotaryEmbedding.__init__(self, head_size, rotary_dim,
+                                 max_position_embeddings, base,
+                                 is_neox_style, dtype)
 
 
 class Phi3SuScaledRotaryEmbedding(nn.Module):
@@ -560,6 +601,18 @@ def get_rope(
                                                     base, is_neox_style,
                                                     scaling_factor, dtype,
                                                     **extra_kwargs)
+        elif scaling_type == "deepseek_yarn":
+            original_max_position = rope_scaling[
+                "original_max_position_embeddings"]
+            extra_kwargs = {
+                k: v
+                for k, v in rope_scaling.items()
+                if k in ("extrapolation_factor", "attn_factor", "beta_fast",
+                         "beta_slow", "mscale", "mscale_all_dim")
+            }
+            rotary_emb = DeepseekYaRNScalingRotaryEmbedding(
+                head_size, rotary_dim, original_max_position, base,
+                is_neox_style, scaling_factor, dtype, **extra_kwargs)
         elif scaling_type == "su":
             short_factor = rope_scaling["short_factor"]
             long_factor = rope_scaling["long_factor"]

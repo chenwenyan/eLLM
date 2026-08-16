@@ -40,7 +40,6 @@ class PagedAttention:
         num_kv_heads: int,
         head_size: int,
     ) -> Tuple[int, ...]:
-        print(f'num_blocks is {num_blocks}, block_size is {block_size}, num_kv_heads is {num_kv_heads}, head_size is {head_size}')
         return (2, num_blocks, block_size * num_kv_heads * head_size)
 
     @staticmethod

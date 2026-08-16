@@ -352,6 +352,64 @@ def fused_topk(
     return topk_weights, topk_ids
 
 
+def grouped_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    num_expert_group: int,
+    topk_group: int,
+    scoring_func: str = "softmax",
+    routed_scaling_factor: float = 1.0,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Select experts using DeepSeek's group-limited greedy routing.
+
+    Experts are split into equally sized groups. For each token, only the
+    ``topk_group`` groups with the highest expert score remain eligible, then
+    the final ``topk`` experts are selected from those groups.
+    """
+    assert hidden_states.shape[0] == gating_output.shape[0], (
+        "Number of tokens mismatch")
+    num_experts = gating_output.shape[1]
+    if num_expert_group <= 0 or num_experts % num_expert_group != 0:
+        raise ValueError("num_expert_group must evenly divide num_experts")
+    if not 0 < topk_group <= num_expert_group:
+        raise ValueError("topk_group must be in [1, num_expert_group]")
+    experts_per_group = num_experts // num_expert_group
+    if not 0 < topk <= topk_group * experts_per_group:
+        raise ValueError("topk exceeds the selected groups' expert count")
+
+    if scoring_func == "softmax":
+        scores = torch.softmax(gating_output, dim=-1, dtype=torch.float32)
+    elif scoring_func == "sigmoid":
+        scores = torch.sigmoid(gating_output.float())
+    else:
+        raise ValueError(f"Unsupported scoring function: {scoring_func}")
+
+    num_tokens = scores.shape[0]
+    grouped_scores = scores.view(num_tokens, num_expert_group,
+                                 experts_per_group)
+    group_scores = grouped_scores.max(dim=-1).values
+    selected_groups = torch.topk(group_scores,
+                                 k=topk_group,
+                                 dim=-1,
+                                 sorted=False).indices
+    group_mask = torch.zeros_like(group_scores, dtype=torch.bool)
+    group_mask.scatter_(1, selected_groups, True)
+    expert_mask = group_mask.unsqueeze(-1).expand_as(grouped_scores).reshape(
+        num_tokens, num_experts)
+    masked_scores = scores.masked_fill(~expert_mask, float("-inf"))
+    topk_weights, topk_ids = torch.topk(masked_scores,
+                                        k=topk,
+                                        dim=-1,
+                                        sorted=False)
+    if renormalize:
+        topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+    if routed_scaling_factor != 1.0:
+        topk_weights = topk_weights * routed_scaling_factor
+    return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
+
+
 def fused_experts(hidden_states: torch.Tensor,
                   w1: torch.Tensor,
                   w2: torch.Tensor,

@@ -94,7 +94,7 @@ class EngineArgs:
     # add new configuration here
     preemption_mode: Optional[str] = None
     store_cache_layers: float = 1.0
-    scheduling_policy: Optional[str] = None
+    scheduling_policy: str = "fcfs"
     wt_weight: float = 1.0
     flatten_layers: Optional[int] = None
 

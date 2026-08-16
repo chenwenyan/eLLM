@@ -211,7 +211,6 @@ class _AsyncLLMEngine(LLMEngine):
         the sequences and returns the newly generated results.
         """
         seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
-        print("AsyncLLMEngine-seq_group_metadata_list", len(seq_group_metadata_list))
 
         if not scheduler_outputs.is_empty():
             # Execute the model.
